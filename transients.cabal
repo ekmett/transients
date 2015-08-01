@@ -17,6 +17,7 @@ description:   Transients
 
 extra-source-files:
   examples/Tree.hs
+  HLint.hs
   CHANGELOG.markdown
   README.markdown
 
