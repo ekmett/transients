@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RoleAnnotations #-}
 --------------------------------------------------------------------------------
 -- |
 -- Copyright   : (c) Edward Kmett 2015
@@ -34,6 +35,10 @@ data SmallArray a = SmallArray (SmallArray# a)
 
 -- | Mutable boxed arrays associated with a primitive state token.
 data SmallMutableArray s a = SmallMutableArray (SmallMutableArray# s a)
+
+#ifndef HLINT
+type role SmallMutableArray nominal representational
+#endif
 
 -- | Create a new mutable array of the specified size and initialise all
 -- elements with the given value.
