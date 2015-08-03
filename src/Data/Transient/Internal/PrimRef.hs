@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE UnboxedTuples #-}
@@ -33,7 +34,9 @@ import GHC.Types (Int(I#))
 
 newtype PrimRef s a = PrimRef (MutableByteArray s)
 
+#ifndef HLINT
 type role PrimRef nominal nominal
+#endif
 
 -- | Create a primitive reference.
 newPrimRef :: (PrimMonad m, Prim a) => a -> m (PrimRef (PrimState m) a)
@@ -90,7 +93,9 @@ unsafeFreezePrimRef (PrimRef m) = FrozenPrimRef <$> unsafeFreezeByteArray m
 
 newtype FrozenPrimRef a = FrozenPrimRef ByteArray
 
+#ifndef HLINT
 type role FrozenPrimRef nominal
+#endif
 
 -- | Read the stored primitive value from the frozen reference.
 indexFrozenPrimRef :: Prim a => FrozenPrimRef a -> a
