@@ -1,7 +1,9 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE RoleAnnotations #-}
 
 import Control.Exception
 import Control.Monad.Primitive
@@ -19,13 +21,18 @@ data Tree a
   | Bin a (Tree a) (Tree a) 
   deriving (Functor,Foldable, Traversable,Show,Read,Eq,Ord)
 
-newtype TTree s a = TTree (MutVar s (TNode s a)) deriving (Eq)
-
 data TNode s a
   = Thaw (Tree a)
   | TBin a !(TTree s a) !(TTree s a)
   | Frozen
   deriving (Eq)
+
+newtype TTree s a = TTree (MutVar s (TNode s a)) deriving (Eq)
+
+#ifndef HLINT
+type role TNode nominal representational
+type role TTree nominal representational
+#endif
 
 -- O(1) worst-case
 thaw :: PrimMonad m => Tree a -> m (TTree (PrimState m) a)
