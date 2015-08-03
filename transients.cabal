@@ -44,6 +44,7 @@ library
 
   exposed-modules:
     Data.Transient.WordMap
+    Data.Transient.Internal.PrimRef
     Data.Transient.Internal.SmallArray
 
   ghc-options: -Wall -fwarn-tabs -O2
