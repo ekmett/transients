@@ -21,8 +21,6 @@ module Data.Transient.Internal.PrimRef
 
 import Control.Monad.Primitive
 import Data.Primitive
-import Data.Primitive.ByteArray
-import GHC.Prim
 
 --------------------------------------------------------------------------------
 -- * Primitive References
