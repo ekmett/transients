@@ -73,7 +73,7 @@ instance Eq (PrimRef s a) where
   PrimRef m == PrimRef n = sameMutableByteArray m n
   {-# INLINE (==) #-}
 
--- | Yield a pointer to the PrimRef's data. This operation is only safe on pinned byte arrays allocated by
+-- | Yield a pointer to the data of a 'PrimRef'. This operation is only safe on pinned byte arrays allocated by
 -- 'newPinnedPrimRef' or 'newAlignedPinnedPrimRef'.
 primRefContents :: PrimRef s a -> Addr
 primRefContents (PrimRef m) = mutableByteArrayContents m
@@ -102,8 +102,8 @@ unsafeThawPrimRef :: PrimMonad m => FrozenPrimRef a -> m (PrimRef (PrimState m) 
 unsafeThawPrimRef (FrozenPrimRef m) = PrimRef <$> unsafeThawByteArray m
 {-# INLINE unsafeThawPrimRef #-}
 
--- | Yield a pointer to the PrimRef's data. This operation is only safe on pinned byte arrays allocated by
--- 'newPinnedPrimRef' or 'newPinnedAlignedPrimRef' and then subsequently frozen.
+-- | Yield a pointer to the data of a 'FrozenPrimRef'. This operation is only safe on pinned byte arrays allocated by
+-- 'newPinnedPrimRef' or 'newAlignedPinnedPrimRef' and then subsequently frozen.
 frozenPrimRefContents :: FrozenPrimRef a -> Addr
 frozenPrimRefContents (FrozenPrimRef m) = byteArrayContents m
 {-# INLINE frozenPrimRefContents #-}
