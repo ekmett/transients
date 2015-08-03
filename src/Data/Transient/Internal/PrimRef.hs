@@ -1,5 +1,6 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE UnboxedTuples #-}
 
 module Data.Transient.Internal.PrimRef
   ( 
@@ -17,10 +18,14 @@ module Data.Transient.Internal.PrimRef
   , unsafeThawPrimRef
   , indexFrozenPrimRef
   , frozenPrimRefContents
+  -- * Atomic Operations
+  , casInt
   ) where
 
 import Control.Monad.Primitive
 import Data.Primitive
+import GHC.Prim (casIntArray#)
+import GHC.Types (Int(I#))
 
 --------------------------------------------------------------------------------
 -- * Primitive References
@@ -102,3 +107,12 @@ unsafeThawPrimRef (FrozenPrimRef m) = PrimRef <$> unsafeThawByteArray m
 frozenPrimRefContents :: FrozenPrimRef a -> Addr
 frozenPrimRefContents (FrozenPrimRef m) = byteArrayContents m
 {-# INLINE frozenPrimRefContents #-}
+
+--------------------------------------------------------------------------------
+-- * Atomic Operations
+--------------------------------------------------------------------------------
+
+-- | Given a primitive reference, the expected old value, and the new value, perform an atomic compare and swap i.e. write the new value if the current value matches the provided old value. Returns the value of the element before the operation. Implies a full memory barrier.
+casInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> Int -> m Int
+casInt (PrimRef (MutableByteArray m)) (I# old) (I# new) = primitive $ \s -> case casIntArray# m 0# old new s of
+  (# s', result #) -> (# s', I# result #)
