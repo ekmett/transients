@@ -14,7 +14,7 @@ import Data.Bits
 import Data.Monoid
 import Data.Primitive.ByteArray
 import Data.Primitive.MutVar
-import Data.Transient.Internal.SmallArray
+import Data.Transient.Primitive.SmallArray
 import GHC.Exts
 
 data Node a 
@@ -83,6 +83,7 @@ data TNode s a
   = TSparse !(SmallMutableArray s (TNode s a)) !(MutableByteArray s)
   | TDense !Int !(SmallMutableArray s (TNode s a))
   | TLeaf !(SmallMutableArray s a)
+  | Thaw (Node a)
 
 data TRoot s a
   = TRoot !Int !(TNode s a)
@@ -97,5 +98,12 @@ type role TRoot nominal representational
 #endif
 
 thaw :: PrimMonad m => Vector a -> m (TVector (PrimState m) a)
-thaw (Root _ _) = undefined
+thaw (Root m v) = TVector <$> newMutVar (TRoot m (Thaw v))
 
+{-
+freeze (TVector r) = readMutVar r >>= \case
+    TRoot m v -> Root m <$> go v
+  where
+    go (TSparse as bs) = do
+      cloneSmallArray as 0 (sizeOf
+-}

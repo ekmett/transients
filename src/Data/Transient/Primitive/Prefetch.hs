@@ -2,7 +2,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE Unsafe #-}
-module Data.Transient.Internal.Prefetch
+module Data.Transient.Primitive.Prefetch
   ( prefetchByteArray0
   , prefetchByteArray1
   , prefetchByteArray2
@@ -29,7 +29,7 @@ import GHC.Prim
 import GHC.Types
 import Control.Monad.Primitive
 import Data.Primitive
-import Data.Transient.Internal.PrimRef
+import Data.Transient.Primitive.PrimRef
 
 prefetchByteArray0, prefetchByteArray1, prefetchByteArray2, prefetchByteArray3 :: PrimMonad m => ByteArray -> Int -> m ()
 prefetchByteArray0 (ByteArray m) (I# i) = primitive $ \s -> case prefetchByteArray0# m i s of s' -> (# s', () #)

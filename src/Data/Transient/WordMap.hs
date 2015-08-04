@@ -39,7 +39,7 @@ import Control.Applicative hiding (empty)
 import Control.DeepSeq
 import Control.Monad.ST hiding (runST)
 import Data.Bits
-import Data.Transient.Internal.SmallArray
+import Data.Transient.Primitive.SmallArray
 import Data.Foldable
 import Data.Functor
 import Data.Monoid

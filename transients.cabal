@@ -43,9 +43,10 @@ library
     primitive
 
   exposed-modules:
-    Data.Transient.Internal.Prefetch
-    Data.Transient.Internal.PrimRef
-    Data.Transient.Internal.SmallArray
+    Data.Transient.Primitive.Instances
+    Data.Transient.Primitive.Prefetch
+    Data.Transient.Primitive.PrimRef
+    Data.Transient.Primitive.SmallArray
     Data.Transient.Vector
     Data.Transient.WordMap
 

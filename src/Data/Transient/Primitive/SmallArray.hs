@@ -17,7 +17,7 @@
 -- Small primitive boxed arrays
 --
 --------------------------------------------------------------------------------
-module Data.Transient.Internal.SmallArray (
+module Data.Transient.Primitive.SmallArray (
   SmallArray(..), SmallMutableArray(..),
   newSmallArray, readSmallArray, writeSmallArray, indexSmallArray, indexSmallArrayM,
   unsafeFreezeSmallArray, unsafeThawSmallArray, sameSmallMutableArray,

@@ -4,7 +4,7 @@
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE Unsafe #-}
 
-module Data.Transient.Internal.PrimRef
+module Data.Transient.Primitive.PrimRef
   ( 
   -- * Primitive References
     PrimRef(..)
