@@ -44,7 +44,6 @@ library
 
   exposed-modules:
     Data.Transient.Primitive.Exts
-    Data.Transient.Primitive.Instances
     Data.Transient.Primitive.PrimRef
     Data.Transient.Primitive.SmallArray
     Data.Transient.Vector
