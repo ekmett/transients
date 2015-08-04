@@ -21,11 +21,19 @@ module Data.Transient.Internal.PrimRef
   , frozenPrimRefContents
   -- * Atomic Operations
   , casInt
+  , fetchAddInt
+  , fetchSubInt
+  , fetchAndInt
+  , fetchNandInt
+  , fetchOrInt
+  , fetchXorInt
+  , atomicReadInt
+  , atomicWriteInt
   ) where
 
 import Control.Monad.Primitive
 import Data.Primitive
-import GHC.Prim (casIntArray#)
+import GHC.Prim
 import GHC.Types (Int(I#))
 
 --------------------------------------------------------------------------------
@@ -121,3 +129,43 @@ frozenPrimRefContents (FrozenPrimRef m) = byteArrayContents m
 casInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> Int -> m Int
 casInt (PrimRef (MutableByteArray m)) (I# old) (I# new) = primitive $ \s -> case casIntArray# m 0# old new s of
   (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to add, atomically add the value to the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchAddInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchAddInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchAddIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to subtract, atomically subtract the value from the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchSubInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchSubInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchSubIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to bitwise and, atomically and the value with the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchAndInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchAndInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchAndIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to bitwise nand, atomically nand the value with the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchNandInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchNandInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchNandIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to bitwise or, atomically or the value with the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchOrInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchOrInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchOrIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, and a value to bitwise xor, atomically xor the value with the element. Returns the value of the element before the operation. Implies a full memory barrier.
+fetchXorInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m Int
+fetchXorInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case fetchXorIntArray# m 0# x s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, read an element. Implies a full memory barrier.
+atomicReadInt :: PrimMonad m => PrimRef (PrimState m) Int -> m Int
+atomicReadInt (PrimRef (MutableByteArray m)) = primitive $ \s -> case atomicReadIntArray# m 0# s of
+  (# s', result #) -> (# s', I# result #)
+
+-- | Given a reference, write an element. Implies a full memory barrier.
+atomicWriteInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m ()
+atomicWriteInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case atomicWriteIntArray# m 0# x s of
+  s' -> (# s', () #)
