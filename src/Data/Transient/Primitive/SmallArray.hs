@@ -6,6 +6,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE Unsafe #-}
 --------------------------------------------------------------------------------
 -- |
@@ -26,7 +27,9 @@ module Data.Transient.Primitive.SmallArray (
   casSmallArray
 ) where
 
+import Control.Applicative
 import Control.DeepSeq
+import Control.Monad
 import Control.Monad.Primitive
 import Data.Foldable as Foldable
 import GHC.Exts
@@ -221,6 +224,52 @@ instance Foldable SmallArray where
 
 instance Traversable SmallArray where
   traverse f a = fromListN (length a) <$> traverse f (Foldable.toList a)
+
+instance Applicative SmallArray where
+  pure a = runST $ newSmallArray 1 a >>= unsafeFreezeSmallArray
+  (m :: SmallArray (a -> b)) <*> (n :: SmallArray a) = runST $ do
+      o <- newSmallArray (lm * ln) undefined
+      outer o 0 0
+    where
+      lm = length m
+      ln = length n
+      outer :: SmallMutableArray s b -> Int -> Int -> ST s (SmallArray b)
+      outer o !i p
+        | i < lm = do
+            f <- indexSmallArrayM m i
+            inner o i 0 f p
+        | otherwise = unsafeFreezeSmallArray o
+      inner :: SmallMutableArray s b -> Int -> Int -> (a -> b) -> Int -> ST s (SmallArray b)
+      inner o i !j f !p
+        | j < ln = do
+            x <- indexSmallArrayM n j
+            writeSmallArray o p (f x)
+            inner o i (j + 1) f (p + 1)
+        | otherwise = outer o (i + 1) p
+
+instance Monad SmallArray where
+  return = pure
+  (>>) = (*>)
+  fail _ = empty
+  m >>= f = foldMap f m
+
+instance MonadPlus SmallArray where
+  mzero = empty
+  mplus = (<|>)
+
+instance Alternative SmallArray where
+  empty = runST $ newSmallArray 0 undefined >>= unsafeFreezeSmallArray
+  m@(SmallArray pm) <|> n@(SmallArray pn) = runST $ case length m of
+     lm@(I# ilm) -> case length n of
+       ln@(I# iln) -> do
+         o@(SmallMutableArray po) <- newSmallArray (lm + ln) undefined
+         primitive_ $ \s -> case copySmallArray# pm 0# po 0# ilm s of
+           s' -> copySmallArray# pn 0# po ilm iln s'
+         unsafeFreezeSmallArray o
+
+instance Monoid (SmallArray a) where
+  mempty = empty
+  mappend = (<|>)
 
 instance Show a => Show (SmallArray a) where
   showsPrec d as = showParen (d > 10) $

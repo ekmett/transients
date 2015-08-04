@@ -11,6 +11,7 @@ module Data.Transient.Primitive.Instances
   () where
 
 import Control.Applicative
+import Control.DeepSeq
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
@@ -117,6 +118,7 @@ instance Applicative Array where
 instance Monad Array where
   return = pure
   (>>) = (*>)
+  fail _ = empty
   m >>= f = foldMap f m
 
 instance MonadPlus Array where
@@ -163,6 +165,13 @@ instance IsList (Array a) where
     go 0 xs0
     unsafeFreezeArray arr
   fromList xs = fromListN (Prelude.length xs) xs
+
+instance NFData a => NFData (Array a) where
+  rnf a0 = go a0 (length a0) 0 where
+    go !a !n !i
+      | i >= n = ()
+      | otherwise = rnf (indexArray a i) `seq` go a n (i+1)
+  {-# INLINE rnf #-}
 
 --------------------------------------------------------------------------------
 -- * Missing MutableArray instances
