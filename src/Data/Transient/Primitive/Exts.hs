@@ -398,12 +398,34 @@ instance Snoc (Array a) (Array b) a b where
         )
       | otherwise = Left empty
 
+
 --------------------------------------------------------------------------------
 -- * Missing MutableArray instances
 --------------------------------------------------------------------------------
 
 instance Eq (MutableArray s a) where
   (==) = sameMutableArray
+
+--------------------------------------------------------------------------------
+-- * Missing ByteArray instances
+--------------------------------------------------------------------------------
+
+instance Monoid ByteArray where
+  mempty = runST $ newByteArray 0 >>= unsafeFreezeByteArray
+  {-# NOINLINE mempty #-}
+  mappend m n = runST $ do
+    o <- newByteArray (lm + ln)
+    copyByteArray o 0 m 0 lm
+    copyByteArray o lm n 0 ln
+    unsafeFreezeByteArray o
+    where lm = sizeOfByteArray m
+          ln = sizeOfByteArray n
+  {-# INLINE mappend #-}
+
+-- * lens
+
+instance AsEmpty ByteArray where
+  _Empty = nearly mempty $ \s -> sizeOfByteArray s == 0
 
 --------------------------------------------------------------------------------
 -- * Missing MutableByteArray instances
