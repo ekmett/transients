@@ -16,6 +16,7 @@ module Data.Transient.Primitive.PrimRef
   , primRefContents
   -- * Frozen Primitive References
   , FrozenPrimRef(..)
+  , newFrozenPrimRef
   , unsafeFreezePrimRef
   , unsafeThawPrimRef
   , indexFrozenPrimRef
@@ -33,6 +34,7 @@ module Data.Transient.Primitive.PrimRef
   ) where
 
 import Control.Monad.Primitive
+import Control.Monad.ST
 import Data.Primitive
 import GHC.Prim
 import GHC.Types (Int(I#))
@@ -105,6 +107,9 @@ newtype FrozenPrimRef a = FrozenPrimRef ByteArray
 #ifndef HLINT
 type role FrozenPrimRef nominal
 #endif
+
+newFrozenPrimRef :: Prim a => a -> FrozenPrimRef a
+newFrozenPrimRef a = runST $ newPrimRef a >>= unsafeFreezePrimRef
 
 -- | Read the stored primitive value from the frozen reference.
 indexFrozenPrimRef :: Prim a => FrozenPrimRef a -> a
