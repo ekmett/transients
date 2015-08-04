@@ -7,6 +7,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults #-}
 #ifdef ST_HACK
@@ -49,6 +50,7 @@ import Data.Monoid
 import Data.Word
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
+import GHC.Exts
 import GHC.Types
 import GHC.ST
 
@@ -306,9 +308,35 @@ singleton :: Key -> v -> WordMap v
 singleton !k v = Tip k v
 {-# INLINE singleton #-}
 
-fromList :: [(Word64,v)] -> WordMap v
-fromList xs = foldl' (\r (k,v) -> insert k v r) Nil xs
-{-# INLINE fromList #-}
+instance FunctorWithIndex Word64 WordMap where
+  imap f (Node k n m  as) = Node k n m (fmap (imap f) as)
+  imap f (Tip k v) = Tip k (f k v)
+  imap _ Nil = Nil
+  imap f (Full k n as) = Full k n (fmap (imap f) as)
+
+instance FoldableWithIndex Word64 WordMap where
+  ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
+  ifoldMap f (Tip k v) = f k v
+  ifoldMap _ Nil = mempty
+  ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
+
+instance TraversableWithIndex Word64 WordMap where
+  itraverse f (Node k n m as) = Node k n m <$> traverse (itraverse f) as
+  itraverse f (Tip k v) = Tip k <$> f k v
+  itraverse _ Nil = pure Nil
+  itraverse f (Full k n as) = Full k n <$> traverse (itraverse f) as
+
+instance IsList (WordMap v) where
+  type Item (WordMap v) = (Word64, v)
+
+  toList = ifoldr (\i a r -> (i, a): r) []
+  {-# INLINE toList #-}
+
+  fromList xs = foldl' (\r (k,v) -> insert k v r) Nil xs
+  {-# INLINE fromList #-}
+
+  fromListN _ = fromList
+  {-# INLINE fromListN #-}
 
 empty :: WordMap a
 empty = Nil
