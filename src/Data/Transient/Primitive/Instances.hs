@@ -16,6 +16,7 @@ import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
 import Control.Monad.Zip
+-- import Data.Data
 import Data.Foldable as Foldable
 import Data.Function (on)
 import Data.Primitive
@@ -51,6 +52,23 @@ foreign import ccall unsafe "primitive-memops.h hsprimitive_memset_Ptr"
 --------------------------------------------------------------------------------
 -- * Missing Array instances
 --------------------------------------------------------------------------------
+
+{-
+instance Data a => Data (Array a) where
+  gfoldl f z m   = z fromList `f` Foldable.toList m
+  toConstr _     = fromListConstr
+  gunfold k z c  = case constrIndex c of
+    1 -> k (z fromList)
+    _ -> error "gunfold"
+  dataTypeOf _   = arrayDataType
+  dataCast1 f    = gcast1 f
+
+fromListConstr :: Constr
+fromListConstr = mkConstr arrayDataType "fromList" [] Prefix
+
+arrayDataType :: DataType
+arrayDataType = mkDataType "Data.Primitive.Array.Array" [fromListConstr]
+-}
 
 instance Functor Array where
   fmap f !i = runST $ do

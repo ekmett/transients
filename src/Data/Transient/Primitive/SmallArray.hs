@@ -32,6 +32,7 @@ import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Primitive
 import Control.Monad.Zip
+import Data.Data
 import Data.Foldable as Foldable
 import GHC.Exts
 import GHC.ST
@@ -312,3 +313,18 @@ instance NFData a => NFData (SmallArray a) where
 casSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
 casSmallArray (SmallMutableArray m) (I# i) a b = primitive $ \s -> case casSmallArray# m i a b s of
   (# s', j, c #) -> (# s', (I# j, c) #)
+
+instance Data a => Data (SmallArray a) where
+  gfoldl f z m   = z fromList `f` Foldable.toList m
+  toConstr _     = fromListConstr
+  gunfold k z c  = case constrIndex c of
+    1 -> k (z fromList)
+    _ -> error "gunfold"
+  dataTypeOf _   = smallArrayDataType
+  dataCast1 f    = gcast1 f
+
+fromListConstr :: Constr
+fromListConstr = mkConstr smallArrayDataType "fromList" [] Prefix
+
+smallArrayDataType :: DataType
+smallArrayDataType = mkDataType "Data.Transient.Primitive.SmallArray.SmallArray" [fromListConstr]
