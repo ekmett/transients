@@ -159,11 +159,7 @@ delete !k xs0 = go xs0 where
     | !oz <- indexSmallArray as odm
     , z <- go oz = case z of
       Nil | las == 2 -> indexSmallArray as (1-odm) -- this level has one inhabitant, remove it
-          | otherwise -> runST $ do
-            o <- newSmallArray (las - 1) undefined
-            copySmallArray o 0 as 0 odm
-            copySmallArray o odm as (odm+1) (las - odm - 1)
-            Node ok n m' <$> unsafeFreezeSmallArray o
+          | otherwise -> Node ok n m' (deleteSmallArray odm as)
         where
           m' = m .&. complement b
           las = length as
@@ -180,11 +176,7 @@ delete !k xs0 = go xs0 where
     | wd > 0xf = on
     | !oz <- indexSmallArray as d
     , z <- go oz = case z of
-      Nil -> runST $ do
-        o <- newSmallArray 15 undefined
-        copySmallArray o 0 as 0 d
-        copySmallArray o d as (d+1) (15-d)
-        Node ok n (clearBit 0xffff d) <$> unsafeFreezeSmallArray o
+      Nil -> Node ok n (clearBit 0xffff d) (deleteSmallArray d as)
       z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
          | otherwise -> on
     | otherwise = on
@@ -280,6 +272,15 @@ insertSmallArray !k a i = runST $ do
   copySmallArray  o (k+1) i k (n-k)
   unsafeFreezeSmallArray o
 {-# INLINEABLE insertSmallArray #-}
+
+deleteSmallArray :: Int -> SmallArray a -> SmallArray a
+deleteSmallArray !k i = runST $ do
+  let n = length i
+  o <- newSmallArray (n - 1) undefined
+  copySmallArray o 0 i 0 k
+  copySmallArray o k i (k+1) (n-k-1)
+  unsafeFreezeSmallArray o
+{-# INLINEABLE deleteSmallArray #-}
 
 clone16 :: SmallArray a -> ST s (SmallMutableArray s a)
 clone16 i = do
