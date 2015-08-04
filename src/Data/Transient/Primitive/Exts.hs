@@ -11,8 +11,12 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Transient.Primitive.Exts
   (
+    sizeOfArray
+  , sizeOfMutableArray
+  , sizeOfByteArray
+  , sizeOfMutableByteArray
   -- * Atomics
-    casArray
+  , casArray
   , casIntArray
   , atomicReadIntArray
   , atomicWriteIntArray
@@ -53,12 +57,28 @@ import GHC.Exts
 import Text.Read
 
 --------------------------------------------------------------------------------
--- * Atomics
+-- * Array Primitives
 --------------------------------------------------------------------------------
+
+sizeOfArray :: Array a -> Int
+sizeOfArray (Array m) = I# (sizeofArray# m)
+
+sizeOfMutableArray :: MutableArray s a -> Int
+sizeOfMutableArray (MutableArray m) = I# (sizeofMutableArray# m)
 
 casArray :: PrimMonad m => MutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
 casArray (MutableArray m) (I# i) x y = primitive $ \s -> case casArray# m i x y s of
   (# s', i', z #) -> (# s', (I# i', z) #)
+
+--------------------------------------------------------------------------------
+-- * ByteArray Primitives
+--------------------------------------------------------------------------------
+
+sizeOfByteArray :: ByteArray -> Int
+sizeOfByteArray (ByteArray m) = I# (sizeofByteArray# m)
+
+sizeOfMutableByteArray :: MutableByteArray s -> Int
+sizeOfMutableByteArray (MutableByteArray m) = I# (sizeofMutableByteArray# m)
 
 casIntArray :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> Int -> Int -> m Int 
 casIntArray (MutableByteArray m) (I# i) (I# x) (I# y) = primitive $ \s -> case casIntArray# m i x y s of
