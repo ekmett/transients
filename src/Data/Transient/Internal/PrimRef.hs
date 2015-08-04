@@ -2,11 +2,12 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE Unsafe #-}
 
 module Data.Transient.Internal.PrimRef
   ( 
   -- * Primitive References
-    PrimRef
+    PrimRef(..)
   , newPrimRef
   , newPinnedPrimRef
   , newAlignedPinnedPrimRef
@@ -14,7 +15,7 @@ module Data.Transient.Internal.PrimRef
   , writePrimRef
   , primRefContents
   -- * Frozen Primitive References
-  , FrozenPrimRef
+  , FrozenPrimRef(..)
   , unsafeFreezePrimRef
   , unsafeThawPrimRef
   , indexFrozenPrimRef
