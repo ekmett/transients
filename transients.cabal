@@ -43,6 +43,7 @@ library
     primitive
 
   exposed-modules:
+    Data.Transient.Primitive.Exts
     Data.Transient.Primitive.Instances
     Data.Transient.Primitive.Prefetch
     Data.Transient.Primitive.PrimRef
