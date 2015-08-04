@@ -155,9 +155,14 @@ instance Read a => Read (Array a) where
 
 instance IsList (Array a) where
   type Item (Array a) = a
-  fromList = undefined -- TODO
-  fromListN = undefined -- TODO
   toList = Foldable.toList
+  fromListN n xs0 = runST $ do
+    arr <- newArray n undefined
+    let go !_ []     = return ()
+        go k (x:xs) = writeArray arr k x >> go (k+1) xs
+    go 0 xs0
+    unsafeFreezeArray arr
+  fromList xs = fromListN (Prelude.length xs) xs
 
 --------------------------------------------------------------------------------
 -- * Missing MutableArray instances
