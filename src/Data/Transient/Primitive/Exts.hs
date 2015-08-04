@@ -11,12 +11,16 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Transient.Primitive.Exts
   (
-    sizeOfArray
+  -- * MutVar Primitives
+    sameMutVar
+  , casMutVar
+  -- * Array Primitives
+  , sizeOfArray
   , sizeOfMutableArray
+  , casArray
+  -- * ByteArray Primitives
   , sizeOfByteArray
   , sizeOfMutableByteArray
-  -- * Atomics
-  , casArray
   , casIntArray
   , atomicReadIntArray
   , atomicWriteIntArray
@@ -52,9 +56,21 @@ import Data.Function (on)
 import Data.Primitive.Array
 import Data.Primitive.ByteArray
 import Data.Primitive.MachDeps
+import Data.Primitive.MutVar
 import Data.Primitive.Types
 import GHC.Exts
 import Text.Read
+
+--------------------------------------------------------------------------------
+-- * MutVar Primitives
+--------------------------------------------------------------------------------
+
+casMutVar :: PrimMonad m => MutVar (PrimState m) a -> a -> a -> m (Int, a) 
+casMutVar (MutVar m) a b = primitive $ \s -> case casMutVar# m a b s of
+  (# s', i, r #) -> (# s', (I# i, r) #)
+
+sameMutVar :: MutVar s a -> MutVar s a -> Bool
+sameMutVar (MutVar a) (MutVar b) = isTrue# (sameMutVar# a b)
 
 --------------------------------------------------------------------------------
 -- * Array Primitives
@@ -338,3 +354,4 @@ instance Eq (MutableArray s a) where
 
 instance Eq (MutableByteArray s) where
   (==) = sameMutableByteArray
+
