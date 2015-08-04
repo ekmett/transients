@@ -21,7 +21,8 @@ module Data.Transient.Internal.SmallArray (
   newSmallArray, readSmallArray, writeSmallArray, indexSmallArray, indexSmallArrayM,
   unsafeFreezeSmallArray, unsafeThawSmallArray, sameSmallMutableArray,
   copySmallArray, copySmallMutableArray,
-  cloneSmallArray, cloneSmallMutableArray
+  cloneSmallArray, cloneSmallMutableArray,
+  casSmallArray
 ) where
 
 import Control.DeepSeq
@@ -35,6 +36,9 @@ data SmallArray a = SmallArray (SmallArray# a)
 
 -- | Mutable boxed arrays associated with a primitive state token.
 data SmallMutableArray s a = SmallMutableArray (SmallMutableArray# s a)
+
+instance Eq (SmallMutableArray s a) where
+  (==) = sameSmallMutableArray
 
 #ifndef HLINT
 type role SmallMutableArray nominal representational
@@ -236,3 +240,8 @@ instance NFData a => NFData (SmallArray a) where
       | i >= n = ()
       | otherwise = rnf (indexSmallArray a i) `seq` go a n (i+1)
   {-# INLINE rnf #-}
+
+-- | Perform an unsafe, machine-level atomic compare and swap on an element within an array.
+casSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
+casSmallArray (SmallMutableArray m) (I# i) a b = primitive $ \s -> case casSmallArray# m i a b s of
+  (# s', j, c #) -> (# s', (I# j, c) #)
