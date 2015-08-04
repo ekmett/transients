@@ -31,6 +31,7 @@ import Control.Applicative
 import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Primitive
+import Control.Monad.Zip
 import Data.Foldable as Foldable
 import GHC.Exts
 import GHC.ST
@@ -156,7 +157,7 @@ cloneSmallArray :: SmallArray a -- ^ source array
            -> Int     -- ^ number of elements to copy
            -> SmallArray a
 {-# INLINE cloneSmallArray #-}
-cloneSmallArray (SmallArray arr#) (I# off#) (I# len#) 
+cloneSmallArray (SmallArray arr#) (I# off#) (I# len#)
   = case cloneSmallArray# arr# off# len# of arr'# -> SmallArray arr'#
 
 -- | Return a newly allocated SmallMutableArray. with the specified subrange of
@@ -252,6 +253,22 @@ instance Monad SmallArray where
   (>>) = (*>)
   fail _ = empty
   m >>= f = foldMap f m
+
+instance MonadZip SmallArray where
+  mzipWith (f :: a -> b -> c) m n = runST $ do
+    o <- newSmallArray l undefined
+    go o 0
+    where
+      l = min (length m) (length n)
+      go :: SmallMutableArray s c -> Int -> ST s (SmallArray c)
+      go o !i
+        | i < l = do
+          a <- indexSmallArrayM m i
+          b <- indexSmallArrayM n i
+          writeSmallArray o i (f a b)
+          go o (i + 1)
+        | otherwise = unsafeFreezeSmallArray o
+  munzip m = (fmap fst m, fmap snd m)
 
 instance MonadPlus SmallArray where
   mzero = empty

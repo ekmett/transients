@@ -15,6 +15,7 @@ import Control.DeepSeq
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
+import Control.Monad.Zip
 import Data.Foldable as Foldable
 import Data.Function (on)
 import Data.Primitive
@@ -98,7 +99,7 @@ instance Applicative Array where
   (m :: Array (a -> b)) <*> (n :: Array a) = runST $ do
       o <- newArray (lm * ln) undefined
       outer o 0 0
-    where 
+    where
       lm = length m
       ln = length n
       outer :: MutableArray s b -> Int -> Int -> ST s (Array b)
@@ -122,13 +123,29 @@ instance Monad Array where
   m >>= f = foldMap f m
 
 instance MonadPlus Array where
-  mzero = empty 
+  mzero = empty
   mplus = (<|>)
+
+instance MonadZip Array where
+  mzipWith (f :: a -> b -> c) m n = runST $ do
+    o <- newArray l undefined
+    go o 0
+    where
+      l = min (length m) (length n)
+      go :: MutableArray s c -> Int -> ST s (Array c)
+      go o !i
+        | i < l = do
+          a <- indexArrayM m i
+          b <- indexArrayM n i
+          writeArray o i (f a b)
+          go o (i + 1)
+        | otherwise = unsafeFreezeArray o
+  munzip m = (fmap fst m, fmap snd m)
 
 instance Alternative Array where
   empty = runST $ newArray 0 undefined >>= unsafeFreezeArray
   m@(Array pm) <|> n@(Array pn) = runST $ case length m of
-     lm@(I# ilm) -> case length n of 
+     lm@(I# ilm) -> case length n of
        ln@(I# iln) -> do
          o@(MutableArray po) <- newArray (lm + ln) undefined
          primitive_ $ \s -> case copyArray# pm 0# po 0# ilm s of
@@ -138,7 +155,7 @@ instance Alternative Array where
 instance Monoid (Array a) where
   mempty = empty
   mappend = (<|>)
-    
+
 instance Eq a => Eq (Array a) where
   (==) = (==) `on` Foldable.toList
 
@@ -146,7 +163,7 @@ instance Ord a => Ord (Array a) where
   compare = compare `on` Foldable.toList
 
 instance Show a => Show (Array a) where
-  showsPrec d arr = showParen (d > 10) $ 
+  showsPrec d arr = showParen (d > 10) $
     showString "fromList " . showsPrec 11 (Foldable.toList arr)
 
 instance Read a => Read (Array a) where
