@@ -7,7 +7,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
-{-# OPTIONS_GHC -Wall -funbox-strict-fields -fno-warn-orphans -fno-warn-type-defaults -O2 #-}
+{-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults #-}
 #ifdef ST_HACK
 {-# OPTIONS_GHC -fno-full-laziness #-}
 #endif
@@ -30,6 +30,7 @@ module Data.Transient.WordMap
   , singleton
   , empty
   , insert
+  , delete
   , lookup
   , member
   , fromList
@@ -37,13 +38,13 @@ module Data.Transient.WordMap
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
+import Control.Lens
 import Control.Monad.ST hiding (runST)
 import Data.Bits
 import Data.Transient.Primitive.SmallArray
 import Data.Foldable
 import Data.Functor
 import Data.Monoid
-import Data.Traversable
 import Data.Word
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
@@ -94,6 +95,8 @@ instance Foldable WordMap where
     go (Node _ _ _ a) = foldMap go a
     go (Tip _ v) = f v
     go Nil = mempty
+  null Nil = True
+  null _ = False
   {-# INLINEABLE foldMap #-}
 
 instance Traversable WordMap where
@@ -103,6 +106,20 @@ instance Traversable WordMap where
     go (Tip k v) = Tip k <$> f v
     go Nil = pure Nil
   {-# INLINEABLE traverse #-}
+
+instance AsEmpty (WordMap a) where
+  _Empty = prism (const Nil) $ \s -> case s of
+    Nil -> Right ()
+    t -> Left t
+
+type instance Index (WordMap a) = Word64
+type instance IxValue (WordMap a) = a
+
+instance Ixed (WordMap a) where
+  ix = undefined
+
+instance At (WordMap a) where
+  at = undefined
 
 -- Note: 'level 0' will return a negative shift, don't use it
 level :: Key -> Int
@@ -127,18 +144,54 @@ fork o k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|
   writeSmallArray arr (fromEnum (k < ok)) on
   unsafeFreezeSmallArray arr
 
-insert :: Key -> v -> WordMap v -> WordMap v
-insert !k v xs0 = go xs0 where
-  go on@(Full ok n as)
-    | wd > 0xf = fork (level okk) k (Tip k v) ok on
-    | !oz <- indexSmallArray as d
-    , !z <- go oz
-    , ptrNeq z oz = Full ok n (update16 d z as)
+delete :: Key -> WordMap v -> WordMap v
+delete !k xs0 = go xs0 where
+  go on@(Node ok n m as)
+    | wd > 0xf = on
+    | m .&. b == 0 = on
+    | !oz <- indexSmallArray as odm
+    , z <- go oz = case z of
+      Nil | las == 2 -> indexSmallArray as (1-odm) -- this level has one inhabitant, remove it
+          | otherwise -> runST $ do
+            o <- newSmallArray (las - 1) undefined
+            copySmallArray o 0 as 0 odm
+            copySmallArray o odm as (odm+1) (las - odm - 1)
+            Node ok n m' <$> unsafeFreezeSmallArray o
+        where
+          m' = m .&. complement b
+          las = length as
+      !z' | ptrNeq z' oz -> Node ok n m (updateSmallArray odm z' as)
+          | otherwise -> on
     | otherwise = on
     where
       okk = xor ok k
       wd  = unsafeShiftR okk n
       d   = fromIntegral wd
+      b   = unsafeShiftL 1 d
+      odm = popCount $ m .&. (b - 1)
+  go on@(Full ok n as)
+    | wd > 0xf = on
+    | !oz <- indexSmallArray as d
+    , z <- go oz = case z of
+      Nil -> runST $ do
+        o <- newSmallArray 15 undefined
+        copySmallArray o 0 as 0 d
+        copySmallArray o d as (d+1) (14-d)
+        Node ok n (clearBit 0xffff d) <$> unsafeFreezeSmallArray o
+      z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
+         | otherwise -> on
+    | otherwise = on
+    where
+      okk = xor ok k
+      wd  = unsafeShiftR okk n
+      d   = fromIntegral wd
+  go on@(Tip ok _)
+    | k == ok   = Nil
+    | otherwise = on
+  go Nil = Nil
+
+insert :: Key -> v -> WordMap v -> WordMap v
+insert !k v xs0 = go xs0 where
   go on@(Node ok n m as)
     | wd > 0xf = fork (level okk) k (Tip k v) ok on
     | m .&. b == 0 = node ok n (m .|. b) (insertSmallArray odm (Tip k v) as)
@@ -152,13 +205,22 @@ insert !k v xs0 = go xs0 where
       d   = fromIntegral wd
       b   = unsafeShiftL 1 d
       odm = popCount $ m .&. (b - 1)
+  go on@(Full ok n as)
+    | wd > 0xf = fork (level okk) k (Tip k v) ok on
+    | !oz <- indexSmallArray as d
+    , !z <- go oz
+    , ptrNeq z oz = Full ok n (update16 d z as)
+    | otherwise = on
+    where
+      okk = xor ok k
+      wd  = unsafeShiftR okk n
+      d   = fromIntegral wd
   go on@(Tip ok ov)
     | k /= ok    = fork (level (xor ok k)) k (Tip k v) ok on
     | ptrEq v ov = on
     | otherwise  = Tip k v
   go Nil = Tip k v
 {-# INLINEABLE insert #-}
-
 
 lookup :: Key -> WordMap v -> Maybe v
 lookup !k (Full ok o a)
