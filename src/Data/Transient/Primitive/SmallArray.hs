@@ -6,6 +6,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE Unsafe #-}
 --------------------------------------------------------------------------------
@@ -40,6 +42,7 @@ module Data.Transient.Primitive.SmallArray
 
 import Control.Applicative
 import Control.DeepSeq
+import Control.Lens
 import Control.Monad
 import Control.Monad.Primitive
 import Control.Monad.Zip
@@ -349,3 +352,57 @@ fromListConstr = mkConstr smallArrayDataType "fromList" [] Prefix
 
 smallArrayDataType :: DataType
 smallArrayDataType = mkDataType "Data.Transient.Primitive.SmallArray.SmallArray" [fromListConstr]
+
+-- * Lens support
+
+type instance Index (SmallArray a) = Int
+type instance IxValue (SmallArray a) = a
+
+instance Ixed (SmallArray a) where
+  ix i f m
+    | 0 <= i && i < n = go <$> f (indexSmallArray m i)
+    | otherwise = pure m
+    where
+      n = sizeOfSmallArray m
+      go a = runST $ do
+        o <- newSmallArray n undefined
+        copySmallArray o 0 m 0 n
+        writeSmallArray o i a
+        unsafeFreezeSmallArray o
+
+instance AsEmpty (SmallArray a) where
+  _Empty = nearly empty null
+
+instance Cons (SmallArray a) (SmallArray b) a b where
+  _Cons = prism hither yon where
+    hither (a,m) | n <- sizeOfSmallArray m = runST $ do
+      o <- newSmallArray (n + 1) a
+      copySmallArray o 1 m 0 n
+      unsafeFreezeSmallArray o
+    yon m
+      | n <- sizeOfSmallArray m
+      , n > 0 = Right
+        ( indexSmallArray m 0
+        , runST $ do
+          o <- newSmallArray (n - 1) undefined
+          copySmallArray o 0 m 1 (n - 1)
+          unsafeFreezeSmallArray o
+        )
+      | otherwise = Left empty
+
+instance Snoc (SmallArray a) (SmallArray b) a b where
+  _Snoc = prism hither yon where
+    hither (m,a) | n <- sizeOfSmallArray m = runST $ do
+      o <- newSmallArray (n + 1) a
+      copySmallArray o 0 m 0 n
+      unsafeFreezeSmallArray o
+    yon m
+      | n <- sizeOfSmallArray m
+      , n > 0 = Right
+        ( runST $ do
+          o <- newSmallArray (n - 1) undefined
+          copySmallArray o 0 m 0 (n - 1)
+          unsafeFreezeSmallArray o
+        , indexSmallArray m 0
+        )
+      | otherwise = Left empty
