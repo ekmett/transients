@@ -35,6 +35,7 @@ module Data.Transient.Primitive.PrimRef
 
 import Control.Monad.Primitive
 import Control.Monad.ST
+import Data.Data
 import Data.Primitive
 import GHC.Prim
 import GHC.Types (Int(I#))
@@ -175,3 +176,17 @@ atomicReadInt (PrimRef (MutableByteArray m)) = primitive $ \s -> case atomicRead
 atomicWriteInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m ()
 atomicWriteInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case atomicWriteIntArray# m 0# x s of
   s' -> (# s', () #)
+
+instance (Prim a, Data a) => Data (FrozenPrimRef a) where
+  gfoldl f z m   = z newFrozenPrimRef `f` indexFrozenPrimRef m
+  toConstr _     = newFrozenPrimRefConstr
+  gunfold k z c  = case constrIndex c of
+    1 -> k (z newFrozenPrimRef)
+    _ -> error "gunfold"
+  dataTypeOf _   = frozenPrimRefDataType
+
+newFrozenPrimRefConstr :: Constr
+newFrozenPrimRefConstr = mkConstr frozenPrimRefDataType "newFrozenPrimRef" [] Prefix
+
+frozenPrimRefDataType :: DataType
+frozenPrimRefDataType = mkDataType "Data.Transient.Primitive.FrozenPrimRef" [newFrozenPrimRefConstr]
