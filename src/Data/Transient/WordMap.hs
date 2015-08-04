@@ -176,7 +176,7 @@ delete !k xs0 = go xs0 where
       Nil -> runST $ do
         o <- newSmallArray 15 undefined
         copySmallArray o 0 as 0 d
-        copySmallArray o d as (d+1) (14-d)
+        copySmallArray o d as (d+1) (15-d)
         Node ok n (clearBit 0xffff d) <$> unsafeFreezeSmallArray o
       z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
          | otherwise -> on
