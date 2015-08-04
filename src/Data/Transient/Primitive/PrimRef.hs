@@ -174,8 +174,7 @@ atomicReadInt (PrimRef (MutableByteArray m)) = primitive $ \s -> case atomicRead
 
 -- | Given a reference, write an element. Implies a full memory barrier.
 atomicWriteInt :: PrimMonad m => PrimRef (PrimState m) Int -> Int -> m ()
-atomicWriteInt (PrimRef (MutableByteArray m)) (I# x) = primitive $ \s -> case atomicWriteIntArray# m 0# x s of
-  s' -> (# s', () #)
+atomicWriteInt (PrimRef (MutableByteArray m)) (I# x) = primitive_ $ \s -> atomicWriteIntArray# m 0# x s
 
 instance (Prim a, Data a) => Data (FrozenPrimRef a) where
   gfoldl f z m   = z newFrozenPrimRef `f` indexFrozenPrimRef m
