@@ -3,11 +3,14 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Data.Transient.Vector where
 
 import Control.Applicative
 import Control.Exception
+import Control.Lens
 import Control.Monad
 import Control.Monad.Primitive
 import Data.Bits
@@ -54,8 +57,8 @@ instance Monoid (Vector a) where
 
 instance Applicative Vector where
   pure = return
-  -- we could build an lcm (length n * length m) mutable vector, and then tile the stuff through it
-  -- and peasant multiply it gcd (length n * length m)
+  -- we could build an lcm (length n * length m) mutable vector in place
+  -- and do sweeps through the source material to fill it.
   m <*> n = foldMap (<$> n) m
 
 instance Alternative Vector where
@@ -70,14 +73,25 @@ instance MonadPlus Vector where
   mzero = empty
   mplus = (<|>)
 
-cons :: a -> Vector a -> Vector a
-cons a r = pure a <> r
+instance Cons (Vector a) (Vector b) a b where
+  _Cons = prism (\(a,s) -> pure a <> s) undefined
 
-snoc :: Vector a -> a -> Vector a
-snoc r a = r <> pure a
+instance Snoc (Vector a) (Vector b) a b where
+  _Snoc = prism (\(s,a) -> s <> pure a) undefined
 
-uncons :: Vector a -> Maybe (a, Vector a)
-uncons = undefined -- TODO
+{-
+type Index (Vector a) = Int
+type IxValue (Vector a) = a
+instance Ixed (Vector a) where
+  ix f (Root n r0) k0 | k0 >= 0 && k0 < n = go k0 r0 where
+    go k (Sparse m ks) = case pos k ks of
+      (# i, k' #) -> 
+    go k (Dense h m) = do
+      o <- new
+      go k (indexSmallArray m (unsafeShiftR k h .&. 0xf))
+    go k (Leaf m)    = indexSmallArray m (k .&. 0xf)
+  (!) _ k0 = throw $ IndexOutOfBounds (show k0)
+-}
 
 data TNode s a
   = TSparse !(SmallMutableArray s (TNode s a)) !(MutableByteArray s)
