@@ -51,7 +51,6 @@ import Data.Word
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
 import GHC.Exts
-import GHC.Types
 import GHC.ST
 
 type Key = Word64
@@ -120,7 +119,7 @@ type instance IxValue (WordMap a) = a
 
 instance Ixed (WordMap a) where
   ix i f m = case lookup i m of
-    Just a -> f a <&> \a' -> insert i a m
+    Just a -> f a <&> \a' -> insert i a' m
     Nothing -> pure m
 
 instance At (WordMap a) where
