@@ -8,6 +8,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Transient.Primitive.Exts
   (
@@ -47,6 +49,7 @@ module Data.Transient.Primitive.Exts
 
 import Control.Applicative
 import Control.DeepSeq
+import Control.Lens
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
@@ -65,7 +68,7 @@ import Text.Read
 -- * MutVar Primitives
 --------------------------------------------------------------------------------
 
-casMutVar :: PrimMonad m => MutVar (PrimState m) a -> a -> a -> m (Int, a) 
+casMutVar :: PrimMonad m => MutVar (PrimState m) a -> a -> a -> m (Int, a)
 casMutVar (MutVar m) a b = primitive $ \s -> case casMutVar# m a b s of
   (# s', i, r #) -> (# s', (I# i, r) #)
 
@@ -96,13 +99,13 @@ sizeOfByteArray (ByteArray m) = I# (sizeofByteArray# m)
 sizeOfMutableByteArray :: MutableByteArray s -> Int
 sizeOfMutableByteArray (MutableByteArray m) = I# (sizeofMutableByteArray# m)
 
-casIntArray :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> Int -> Int -> m Int 
+casIntArray :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> Int -> Int -> m Int
 casIntArray (MutableByteArray m) (I# i) (I# x) (I# y) = primitive $ \s -> case casIntArray# m i x y s of
-  (# s', i' #) -> (# s', I# i' #) 
+  (# s', i' #) -> (# s', I# i' #)
 
 atomicReadIntArray :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> m Int
 atomicReadIntArray (MutableByteArray m) (I# i) = primitive $ \s -> case atomicReadIntArray# m i s of
-  (# s', i' #) -> (# s', I# i' #) 
+  (# s', i' #) -> (# s', I# i' #)
 
 atomicWriteIntArray :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> Int -> m ()
 atomicWriteIntArray (MutableByteArray m) (I# i) (I# j) = primitive_ $ \s -> atomicWriteIntArray# m i j s
@@ -340,6 +343,60 @@ instance NFData a => NFData (Array a) where
       | i >= n = ()
       | otherwise = rnf (indexArray a i) `seq` go a n (i+1)
   {-# INLINE rnf #-}
+
+-- lens machinery
+
+type instance Index (Array a) = Int
+type instance IxValue (Array a) = a
+
+instance Ixed (Array a) where
+  ix i f m
+    | 0 <= i && i < n = go <$> f (indexArray m i)
+    | otherwise = pure m
+    where
+      n = sizeOfArray m
+      go a = runST $ do
+        o <- newArray n undefined
+        copyArray o 0 m 0 n
+        writeArray o i a
+        unsafeFreezeArray o
+
+instance AsEmpty (Array a) where
+  _Empty = nearly empty null
+
+instance Cons (Array a) (Array b) a b where
+  _Cons = prism hither yon where
+    hither (a,m) | n <- sizeOfArray m = runST $ do
+      o <- newArray (n + 1) a
+      copyArray o 1 m 0 n
+      unsafeFreezeArray o
+    yon m
+      | n <- sizeOfArray m
+      , n > 0 = Right
+        ( indexArray m 0
+        , runST $ do
+          o <- newArray (n - 1) undefined
+          copyArray o 0 m 1 (n - 1)
+          unsafeFreezeArray o
+        )
+      | otherwise = Left empty
+
+instance Snoc (Array a) (Array b) a b where
+  _Snoc = prism hither yon where
+    hither (m,a) | n <- sizeOfArray m = runST $ do
+      o <- newArray (n + 1) a
+      copyArray o 0 m 0 n
+      unsafeFreezeArray o
+    yon m
+      | n <- sizeOfArray m
+      , n > 0 = Right
+        ( runST $ do
+          o <- newArray (n - 1) undefined
+          copyArray o 0 m 0 (n - 1)
+          unsafeFreezeArray o
+        , indexArray m 0
+        )
+      | otherwise = Left empty
 
 --------------------------------------------------------------------------------
 -- * Missing MutableArray instances
