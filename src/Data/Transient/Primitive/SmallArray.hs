@@ -18,14 +18,25 @@
 -- Small primitive boxed arrays
 --
 --------------------------------------------------------------------------------
-module Data.Transient.Primitive.SmallArray (
-  SmallArray(..), SmallMutableArray(..),
-  newSmallArray, readSmallArray, writeSmallArray, indexSmallArray, indexSmallArrayM,
-  unsafeFreezeSmallArray, unsafeThawSmallArray, sameSmallMutableArray,
-  copySmallArray, copySmallMutableArray,
-  cloneSmallArray, cloneSmallMutableArray,
-  casSmallArray
-) where
+module Data.Transient.Primitive.SmallArray
+  ( SmallArray(..)
+  , SmallMutableArray(..)
+  , newSmallArray
+  , readSmallArray
+  , writeSmallArray
+  , indexSmallArray
+  , indexSmallArrayM
+  , unsafeFreezeSmallArray
+  , unsafeThawSmallArray
+  , sameSmallMutableArray
+  , copySmallArray
+  , copySmallMutableArray
+  , cloneSmallArray
+  , cloneSmallMutableArray
+  , casSmallArray
+  , sizeOfSmallArray
+  , sizeOfSmallMutableArray
+  ) where
 
 import Control.Applicative
 import Control.DeepSeq
@@ -221,8 +232,18 @@ instance Foldable SmallArray where
       | k < 0 = z
       | r <- indexSmallArray arr k = r `seq` f (go (k-1)) r
 
-  length (SmallArray ary) = I# (sizeofSmallArray# ary)
+  null a = length a == 0
+
+  length = sizeOfSmallArray
   {-# INLINE length #-}
+
+sizeOfSmallArray :: SmallArray a -> Int
+sizeOfSmallArray (SmallArray a) = I# (sizeofSmallArray# a)
+{-# INLINE sizeOfSmallArray #-}
+
+sizeOfSmallMutableArray :: SmallMutableArray s a -> Int
+sizeOfSmallMutableArray (SmallMutableArray a) = I# (sizeofSmallMutableArray# a)
+{-# INLINE sizeOfSmallMutableArray #-}
 
 instance Traversable SmallArray where
   traverse f a = fromListN (length a) <$> traverse f (Foldable.toList a)
