@@ -20,7 +20,7 @@ import Data.Primitive.MutVar
 import Data.Transient.Primitive.SmallArray
 import GHC.Exts
 
-data Node a 
+data Node a
   = Sparse !(SmallArray (Node a)) !ByteArray
   | Dense  !Int !(SmallArray (Node a))
   | Leaf   !(SmallArray a)
@@ -53,7 +53,7 @@ pos !b q = go 0 where
 
 instance Monoid (Vector a) where
   mempty = empty
-  mappend = (<|>) 
+  mappend = (<|>)
 
 instance Applicative Vector where
   pure = return
@@ -68,10 +68,13 @@ instance Alternative Vector where
 instance Monad Vector where
   return a = Root 1 (Leaf (fromList [a]))
   m >>= f = foldMap f m
-  
+
 instance MonadPlus Vector where
   mzero = empty
   mplus = (<|>)
+
+instance AsEmpty (Vector a) where
+  _Empty = nearly empty null
 
 instance Cons (Vector a) (Vector b) a b where
   _Cons = prism (\(a,s) -> pure a <> s) undefined
@@ -85,7 +88,7 @@ type IxValue (Vector a) = a
 instance Ixed (Vector a) where
   ix f (Root n r0) k0 | k0 >= 0 && k0 < n = go k0 r0 where
     go k (Sparse m ks) = case pos k ks of
-      (# i, k' #) -> 
+      (# i, k' #) -> singular (ix f) m ...
     go k (Dense h m) = do
       o <- new
       go k (indexSmallArray m (unsafeShiftR k h .&. 0xf))
