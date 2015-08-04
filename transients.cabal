@@ -43,10 +43,11 @@ library
     primitive
 
   exposed-modules:
-    Data.Transient.WordMap
     Data.Transient.Internal.Prefetch
     Data.Transient.Internal.PrimRef
     Data.Transient.Internal.SmallArray
+    Data.Transient.Vector
+    Data.Transient.WordMap
 
   ghc-options: -Wall -fwarn-tabs -O2
   hs-source-dirs: src

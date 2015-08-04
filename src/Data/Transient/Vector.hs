@@ -1,10 +1,21 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE DeriveTraversable #-}
 
 module Data.Transient.Vector where
 
+import Control.Applicative
+import Control.Exception
+import Control.Monad
+import Control.Monad.Primitive
+import Data.Bits
+import Data.Monoid
 import Data.Primitive.ByteArray
+import Data.Primitive.MutVar
 import Data.Transient.Internal.SmallArray
+import GHC.Exts
 
 data Node a 
   = Sparse !(SmallArray (Node a)) !ByteArray
@@ -23,9 +34,9 @@ instance Foldable Vector where
   null (Root n _) = n == 0
 
 (!) :: Vector a -> Int -> a
-(!) (Root n r0) k0 | k >= 0 && k < n = go k0 r0 where
+(!) (Root n r0) k0 | k0 >= 0 && k0 < n = go k0 r0 where
   go k (Sparse m ks) = case pos k ks of
-    (# i, k' #) -> go k' (m ! i)
+    (# i, k' #) -> go k' (indexSmallArray m i)
   go k (Dense h m) = go k (indexSmallArray m (unsafeShiftR k h .&. 0xf))
   go k (Leaf m)    = indexSmallArray m (k .&. 0xf)
 (!) _ k0 = throw $ IndexOutOfBounds (show k0)
@@ -49,7 +60,7 @@ instance Applicative Vector where
 
 instance Alternative Vector where
   empty = Root 0 (Leaf (fromList []))
-  Root m i l <|> Root n j r = undefined -- TODO go (Root (m + n)) l r
+  Root m l <|> Root n r = Root (m + n) (undefined l r) -- TODO
 
 instance Monad Vector where
   return a = Root 1 (Leaf (fromList [a]))
@@ -66,8 +77,7 @@ snoc :: Vector a -> a -> Vector a
 snoc r a = r <> pure a
 
 uncons :: Vector a -> Maybe (a, Vector a)
-uncons Empty = Nothing
-uncons v = undefined -- TODO
+uncons = undefined -- TODO
 
 data TNode s a
   = TSparse !(SmallMutableArray s (TNode s a)) !(MutableByteArray s)
@@ -82,10 +92,10 @@ newtype TVector s a = TVector (MutVar s (TRoot s a))
 
 #ifndef HLINT
 type role TVector nominal representational
+type role TNode nominal representational
 type role TRoot nominal representational
-type role RNode nominal representational
 #endif
 
 thaw :: PrimMonad m => Vector a -> m (TVector (PrimState m) a)
-thaw (Root n v) = undefined
+thaw (Root _ _) = undefined
 
