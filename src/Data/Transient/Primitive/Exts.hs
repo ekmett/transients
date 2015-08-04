@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE Unsafe #-}
@@ -12,14 +13,26 @@ module Data.Transient.Primitive.Exts
   , fetchNandIntArray
   , fetchOrIntArray
   , fetchXorIntArray
+  , prefetchByteArray0
+  , prefetchByteArray1
+  , prefetchByteArray2
+  , prefetchByteArray3
+  , prefetchMutableByteArray0
+  , prefetchMutableByteArray1
+  , prefetchMutableByteArray2
+  , prefetchMutableByteArray3
+  , prefetchValue0
+  , prefetchValue1
+  , prefetchValue2
+  , prefetchValue3
   ) where
 
-import GHC.Prim
-import GHC.Types
 import Control.Monad.Primitive
 import Data.Primitive.Array
 import Data.Primitive.ByteArray
 import Data.Transient.Primitive.Instances ()
+import GHC.Prim
+import GHC.Types
 
 casArray :: PrimMonad m => MutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
 casArray (MutableArray m) (I# i) x y = primitive $ \s -> case casArray# m i x y s of
@@ -59,3 +72,21 @@ fetchOrIntArray (MutableByteArray m) (I# i) (I# j) = primitive $ \s -> case fetc
 fetchXorIntArray  :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> Int -> m Int
 fetchXorIntArray (MutableByteArray m) (I# i) (I# j) = primitive $ \s -> case fetchXorIntArray# m i j s of
   (# s', k #) -> (# s', I# k #)
+
+prefetchByteArray0, prefetchByteArray1, prefetchByteArray2, prefetchByteArray3 :: PrimMonad m => ByteArray -> Int -> m ()
+prefetchByteArray0 (ByteArray m) (I# i) = primitive_ $ \s -> prefetchByteArray0# m i s
+prefetchByteArray1 (ByteArray m) (I# i) = primitive_ $ \s -> prefetchByteArray1# m i s
+prefetchByteArray2 (ByteArray m) (I# i) = primitive_ $ \s -> prefetchByteArray2# m i s
+prefetchByteArray3 (ByteArray m) (I# i) = primitive_ $ \s -> prefetchByteArray3# m i s
+
+prefetchMutableByteArray0, prefetchMutableByteArray1, prefetchMutableByteArray2, prefetchMutableByteArray3 :: PrimMonad m => MutableByteArray (PrimState m) -> Int -> m ()
+prefetchMutableByteArray0 (MutableByteArray m) (I# i) = primitive_ $ \s -> prefetchMutableByteArray0# m i s
+prefetchMutableByteArray1 (MutableByteArray m) (I# i) = primitive_ $ \s -> prefetchMutableByteArray1# m i s
+prefetchMutableByteArray2 (MutableByteArray m) (I# i) = primitive_ $ \s -> prefetchMutableByteArray2# m i s
+prefetchMutableByteArray3 (MutableByteArray m) (I# i) = primitive_ $ \s -> prefetchMutableByteArray3# m i s
+
+prefetchValue0, prefetchValue1, prefetchValue2, prefetchValue3 :: PrimMonad m => a -> m ()
+prefetchValue0 a = primitive_ $ \s -> prefetchValue0# a s
+prefetchValue1 a = primitive_ $ \s -> prefetchValue1# a s
+prefetchValue2 a = primitive_ $ \s -> prefetchValue2# a s
+prefetchValue3 a = primitive_ $ \s -> prefetchValue3# a s

@@ -31,12 +31,22 @@ module Data.Transient.Primitive.PrimRef
   , fetchXorInt
   , atomicReadInt
   , atomicWriteInt
+  -- * Prefetching
+  , prefetchPrimRef0
+  , prefetchPrimRef1
+  , prefetchPrimRef2
+  , prefetchPrimRef3
+  , prefetchFrozenPrimRef0
+  , prefetchFrozenPrimRef1
+  , prefetchFrozenPrimRef2
+  , prefetchFrozenPrimRef3
   ) where
 
 import Control.Monad.Primitive
 import Control.Monad.ST
 import Data.Data
 import Data.Primitive
+import Data.Transient.Primitive.Exts
 import GHC.Prim
 import GHC.Types (Int(I#))
 
@@ -189,3 +199,15 @@ newFrozenPrimRefConstr = mkConstr frozenPrimRefDataType "newFrozenPrimRef" [] Pr
 
 frozenPrimRefDataType :: DataType
 frozenPrimRefDataType = mkDataType "Data.Transient.Primitive.FrozenPrimRef" [newFrozenPrimRefConstr]
+
+prefetchPrimRef0, prefetchPrimRef1, prefetchPrimRef2, prefetchPrimRef3 :: PrimMonad m => PrimRef (PrimState m) a -> m ()
+prefetchPrimRef0 (PrimRef m) = prefetchMutableByteArray0 m 0
+prefetchPrimRef1 (PrimRef m) = prefetchMutableByteArray1 m 0
+prefetchPrimRef2 (PrimRef m) = prefetchMutableByteArray2 m 0
+prefetchPrimRef3 (PrimRef m) = prefetchMutableByteArray3 m 0
+
+prefetchFrozenPrimRef0, prefetchFrozenPrimRef1, prefetchFrozenPrimRef2, prefetchFrozenPrimRef3 :: PrimMonad m => FrozenPrimRef a -> m ()
+prefetchFrozenPrimRef0 (FrozenPrimRef m) = prefetchByteArray0 m 0
+prefetchFrozenPrimRef1 (FrozenPrimRef m) = prefetchByteArray1 m 0
+prefetchFrozenPrimRef2 (FrozenPrimRef m) = prefetchByteArray2 m 0
+prefetchFrozenPrimRef3 (FrozenPrimRef m) = prefetchByteArray3 m 0
