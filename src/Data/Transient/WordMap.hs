@@ -6,7 +6,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults #-}
 #ifdef ST_HACK
 {-# OPTIONS_GHC -fno-full-laziness #-}
@@ -116,10 +117,14 @@ type instance Index (WordMap a) = Word64
 type instance IxValue (WordMap a) = a
 
 instance Ixed (WordMap a) where
-  ix = undefined
+  ix i f m = case lookup i m of
+    Just a -> f a <&> \a' -> insert i a m
+    Nothing -> pure m
 
 instance At (WordMap a) where
-  at = undefined
+  at i f m = f (lookup i m) <&> \case
+    Nothing -> delete i m
+    Just a -> insert i a m
 
 -- Note: 'level 0' will return a negative shift, don't use it
 level :: Key -> Int
