@@ -38,9 +38,6 @@ module FlatMap2
   , empty
   , lookup
   , insert
---  , delete
---  , member
---  , fromList
   ) where
 
 import Control.Applicative hiding (empty)
@@ -69,10 +66,6 @@ type Offset = Int
 ptrEq :: a -> a -> Bool
 ptrEq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts.==# 1#)
 {-# INLINEABLE ptrEq #-}
-
-ptrNeq :: a -> a -> Bool
-ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
-{-# INLINEABLE ptrNeq #-}
 
 data WordMap v = Node !Offset !Mask !Mask !ByteArray !(SmallArray Any)
 
@@ -250,62 +243,6 @@ insert k v n0 = runST $ go n0 where
       b  = unsafeShiftL 1 d
 {-# INLINEABLE insert #-}
 
-
--- offset :: Int -> Word16 -> Int
--- offset k w = popCount $ w .&. (unsafeShiftL 1 k - 1)
--- {-# INLINE offset #-}
-
-{-
-delete :: Key -> WordMap v -> WordMap v
-delete !k xs0 = go xs0 where
-  go on@(Node ok n m as)
-    | wd > 0xf = on
-    | m .&. b == 0 = on
-    | !oz <- indexSmallArray as odm
-    , z <- go oz = case z of
-      Node _ 0 _ _ _ | las == 2 -> indexSmallArray as (1-odm) -- this level has one inhabitant, remove it
-          | otherwise -> Node ok n m' (deleteSmallArray odm as)
-        where
-          m' = m .&. complement b
-          las = length as
-      !z' | ptrNeq z' oz -> Node ok n m (updateSmallArray odm z' as)
-          | otherwise -> on
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-      b   = unsafeShiftL 1 d
-      odm = popCount $ m .&. (b - 1)
-  go on@(Full ok n as)
-    | wd > 0xf = on
-    | !oz <- indexSmallArray as d
-    , z <- go oz = case z of
-      Nil -> Node ok n (clearBit 0xffff d) (deleteSmallArray d as)
-      z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
-         | otherwise -> on
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-  go on@(Tip ok _)
-    | k == ok   = Nil
-    | otherwise = on
-  go Nil = Nil
-
-member :: Key -> WordMap v -> Bool
-member !k (Full ok o a)
-  | z <- unsafeShiftR (xor k ok) o = z <= 0xf && member k (indexSmallArray a (fromIntegral z))
-member k (Node ok o m a)
-  | z <- unsafeShiftR (xor k ok) o
-  = z <= 0xf && let b = unsafeShiftL 1 (fromIntegral z) in
-    m .&. b /= 0 && member k (indexSmallArray a (popCount (m .&. (b - 1))))
-member k (Tip ok _) = k == ok
-member _ Nil = False
-{-# INLINEABLE member #-}
-
--}
 updateSmallArray :: Int -> a -> SmallArray a -> SmallArray a
 updateSmallArray !k a i = runST $ do
   let n = length i
@@ -343,17 +280,6 @@ insertByteArray !k a i = runST $ do
   copyByteArray  o (ks+s) i ks (n-ks)
   unsafeFreezeByteArray o
 {-# INLINEABLE insertByteArray #-}
-
-{-
-deleteSmallArray :: Int -> SmallArray a -> SmallArray a
-deleteSmallArray !k i = runST $ do
-  let n = length i
-  o <- newSmallArray (n - 1) undefined
-  copySmallArray o 0 i 0 k
-  copySmallArray o k i (k+1) (n-k-1)
-  unsafeFreezeSmallArray o
-{-# INLINEABLE deleteSmallArray #-}
--}
 
 clone16 :: SmallArray a -> ST s (SmallMutableArray s a)
 clone16 i = do
