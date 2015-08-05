@@ -66,9 +66,9 @@ ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
 {-# INLINEABLE ptrNeq #-}
 
 data WordMap v
-  = Full !Key !Offset !(SmallArray (WordMap v))
-  | Node !Key !Offset !Mask !(SmallArray (WordMap v))
-  | Tip  !Key v
+  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !(SmallArray (WordMap v))
+  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask {-# UNPACK #-} !(SmallArray (WordMap v))
+  | Tip  {-# UNPACK #-} !Key v
   | Nil
   deriving Show
 
@@ -176,8 +176,8 @@ delete !k xs0 = go xs0 where
     | !oz <- indexSmallArray as d
     , z <- go oz = case z of
       Nil -> Node ok n (clearBit 0xffff d) (deleteSmallArray d as)
-      z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
-         | otherwise -> on
+      !z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
+          | otherwise -> on
     | otherwise = on
     where
       okk = xor ok k
