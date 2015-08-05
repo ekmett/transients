@@ -2,7 +2,7 @@ name:          transients
 category:      Data
 version:       0
 license:       BSD3
-cabal-version: >= 1.8
+cabal-version: >= 1.22
 license-file:  LICENSE
 author:        Edward A. Kmett
 maintainer:    Edward A. Kmett <ekmett@gmail.com>
@@ -35,6 +35,11 @@ flag test-hlint
   default: True
   manual: True
 
+-- You can disable the wordmap benchmark suite with -f-benchmark-wordmap
+flag benchmark-wordmap
+  default: True
+  manual: True
+
 library
   build-depends:
     base >= 4.5 && < 5,
@@ -52,12 +57,14 @@ library
 
   ghc-options: -Wall -fwarn-tabs -O2
   hs-source-dirs: src
+  default-language: Haskell2010
 
 test-suite doctests
   type:           exitcode-stdio-1.0
   main-is:        doctests.hs
   ghc-options:    -Wall -threaded
   hs-source-dirs: tests
+  default-language: Haskell2010
 
   if !flag(test-doctests)
     buildable: False
@@ -74,6 +81,7 @@ test-suite hlint
   main-is: hlint.hs
   ghc-options: -w -threaded -rtsopts -with-rtsopts=-N
   hs-source-dirs: tests
+  default-language: Haskell2010
 
   if !flag(test-hlint)
     buildable: False
@@ -81,3 +89,24 @@ test-suite hlint
     build-depends:
       base,
       hlint >= 1.7
+
+benchmark wordmap
+  type:             exitcode-stdio-1.0
+  main-is:          wordmap.hs
+  ghc-options:      -Wall -O2 -threaded
+  hs-source-dirs:   benchmarks
+  default-language: Haskell2010
+  if !flag(benchmark-wordmap)
+    buildable: False
+  else
+
+    build-depends:
+      base >= 4.8,
+      containers,
+      criterion,
+      deepseq,
+      ghc-prim,
+      unordered-containers,
+      primitive,
+      transients,
+      lens
