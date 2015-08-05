@@ -27,12 +27,12 @@
 -- but modified to work nybble-by-nybble rather than bit-by-bit.
 --
 --------------------------------------------------------------------------------
-module Data.Transient.WordMap
+module Dumb
   ( WordMap
   , singleton
   , empty
   , insert
-  , delete
+  -- , delete
   , lookup
   , member
   , fromList
@@ -66,48 +66,35 @@ ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
 {-# INLINEABLE ptrNeq #-}
 
 data WordMap v
-  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !(SmallArray (WordMap v))
-  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask {-# UNPACK #-} !(SmallArray (WordMap v))
-  | Tip  {-# UNPACK #-} !Key v
-  | Nil
-  deriving Show
+  = Nil
+  | WordMap {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(Node v)
+  deriving (Functor, Traversable)
 
-node :: Key -> Offset -> Mask -> SmallArray (WordMap v) -> WordMap v
-node k o 0xffff a = Full k o a
-node k o m a      = Node k o m a
+instance Foldable WordMap where
+  foldMap f (WordMap _ _ v) = foldMap f v
+  foldMap _ Nil = mempty
+  null Nil = True
+  null _ = False
+
+data Node v
+  = Full {-# UNPACK #-} !(SmallArray (Node v))
+  | Node {-# UNPACK #-} !Mask {-# UNPACK #-} !(SmallArray (Node v))
+  | Tip  {-# UNPACK #-} !Key v
+  deriving (Functor, Foldable, Traversable)
+ 
+node :: Mask -> SmallArray (Node v) -> Node v
+node 0xffff a = Full a
+node m a      = Node m a
 {-# INLINE node #-}
 
 instance NFData v => NFData (WordMap v) where
-  rnf (Full _ _ a)   = rnf a
-  rnf (Node _ _ _ a) = rnf a
-  rnf (Tip _ v) = rnf v
-  rnf Nil = ()
+  rnf (WordMap _ _ a) = rnf a
+  rnf Nil           = ()
 
-instance Functor WordMap where
-  fmap f = go where
-    go (Full k o a) = Full k o (fmap go a)
-    go (Node k o m a) = Node k o m (fmap go a)
-    go (Tip k v) = Tip k (f v)
-    go Nil = Nil
-  {-# INLINEABLE fmap #-}
-
-instance Foldable WordMap where
-  foldMap f = go where
-    go (Full _ _ a) = foldMap go a
-    go (Node _ _ _ a) = foldMap go a
-    go (Tip _ v) = f v
-    go Nil = mempty
-  null Nil = True
-  null _ = False
-  {-# INLINEABLE foldMap #-}
-
-instance Traversable WordMap where
-  traverse f = go where
-    go (Full k o a) = Full k o <$> traverse go a
-    go (Node k o m a) = Node k o m <$> traverse go a
-    go (Tip k v) = Tip k <$> f v
-    go Nil = pure Nil
-  {-# INLINEABLE traverse #-}
+instance NFData v => NFData (Node v) where
+  rnf (Full a)   = rnf a
+  rnf (Node _ a) = rnf a
+  rnf (Tip _ v)  = rnf v
 
 instance AsEmpty (WordMap a) where
   _Empty = prism (const Nil) $ \s -> case s of
@@ -122,10 +109,12 @@ instance Ixed (WordMap a) where
     Just a -> f a <&> \a' -> insert i a' m
     Nothing -> pure m
 
+{-
 instance At (WordMap a) where
   at i f m = f (lookup i m) <&> \case
     Nothing -> delete i m
     Just a -> insert i a m
+-}
 
 -- Note: 'level 0' will return a negative shift, don't use it
 level :: Key -> Int
@@ -140,115 +129,92 @@ mask :: Key -> Offset -> Word16
 mask k o = unsafeShiftL 1 (maskBit k o)
 {-# INLINE mask #-}
 
--- offset :: Int -> Word16 -> Int
--- offset k w = popCount $ w .&. (unsafeShiftL 1 k - 1)
--- {-# INLINE offset #-}
+pretty :: Key -> Int -> Key
+pretty k o = k .&. unsafeShiftL 0xfffffffffffffff0 o 
 
-fork :: Int -> Key -> WordMap v -> Key -> WordMap v -> WordMap v
-fork o k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) $ runST $ do
-  arr <- newSmallArray 2 n
-  writeSmallArray arr (fromEnum (k < ok)) on
-  unsafeFreezeSmallArray arr
+fork :: Offset -> Key -> Node v -> Key -> Node v -> WordMap v
+fork n k v ok ov = WordMap (pretty k n) n (runST $ bin n k v ok ov)
 
-delete :: Key -> WordMap v -> WordMap v
-delete !k xs0 = go xs0 where
-  go on@(Node ok n m as)
-    | wd > 0xf = on
-    | m .&. b == 0 = on
-    | !oz <- indexSmallArray as odm
-    , z <- go oz = case z of
-      Nil | las == 2 -> indexSmallArray as (1-odm) -- this level has one inhabitant, remove it
-          | otherwise -> Node ok n m' (deleteSmallArray odm as)
-        where
-          m' = m .&. complement b
-          las = length as
-      !z' | ptrNeq z' oz -> Node ok n m (updateSmallArray odm z' as)
-          | otherwise -> on
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-      b   = unsafeShiftL 1 d
-      odm = popCount $ m .&. (b - 1)
-  go on@(Full ok n as)
-    | wd > 0xf = on
-    | !oz <- indexSmallArray as d
-    , z <- go oz = case z of
-      Nil -> Node ok n (clearBit 0xffff d) (deleteSmallArray d as)
-      !z' | ptrNeq z' oz -> Full ok n (updateSmallArray d z' as)
-          | otherwise -> on
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-  go on@(Tip ok _)
-    | k == ok   = Nil
-    | otherwise = on
-  go Nil = Nil
-
+bin :: Offset -> Key -> Node v -> Key -> Node v -> ST s (Node v)
+bin n k v ok ov 
+  | b == ob = do
+    !z  <- bin (n-4) k v ok ov 
+    mas <- newSmallArray 1 z
+    as  <- unsafeFreezeSmallArray mas
+    return $ Node b as
+  | otherwise = do
+      mas <- newSmallArray 2 v
+      writeSmallArray mas (fromEnum (k < ok)) ov
+      as <- unsafeFreezeSmallArray mas
+      return (Node (b .|. ob) as)
+  where
+    b = mask k n 
+    ob = mask ok n 
+  
 insert :: Key -> v -> WordMap v -> WordMap v
-insert !k v xs0 = go xs0 where
-  go on@(Node ok n m as)
-    | wd > 0xf = fork (level okk) k (Tip k v) ok on
-    | m .&. b == 0 = node ok n (m .|. b) (insertSmallArray odm (Tip k v) as)
-    | !oz <- indexSmallArray as odm
-    , !z <- go oz
-    , ptrNeq z oz = Node ok n m (updateSmallArray odm z as)
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-      b   = unsafeShiftL 1 d
-      odm = popCount $ m .&. (b - 1)
-  go on@(Full ok n as)
-    | wd > 0xf = fork (level okk) k (Tip k v) ok on
-    | !oz <- indexSmallArray as d
-    , !z <- go oz
-    , ptrNeq z oz = Full ok n (update16 d z as)
-    | otherwise = on
-    where
-      okk = xor ok k
-      wd  = unsafeShiftR okk n
-      d   = fromIntegral wd
-  go on@(Tip ok ov)
-    | k /= ok    = fork (level (xor ok k)) k (Tip k v) ok on
-    | ptrEq v ov = on
-    | otherwise  = Tip k v
-  go Nil = Tip k v
+insert k0 v0 Nil = WordMap (pretty k0 0) 0 (Tip k0 v0)
+insert k0 v0 (WordMap ok0 n0 on0)
+  | wd0 > 0xf = fork (level okk0) k0 (Tip k0 v0) ok0 on0
+  | otherwise = WordMap ok0 n0 (go k0 v0 n0 on0)
+  where
+    okk0 = xor ok0 k0
+    wd0 = unsafeShiftR okk0 n0
+    go !k !v !n on@(Tip ok ov)
+      | k /= ok    = runST (bin n k (Tip k v) ok on)
+      | ptrEq v ov = on
+      | otherwise  = Tip k v
+    go k v n on@(Full as)
+      | ptrEq z oz = on
+      | otherwise  = Full (update16 d z as)
+      where
+        d = maskBit k n
+        !oz = indexSmallArray as d
+        !z = go k v (n - 4) oz
+    go k v n on@(Node m as)
+      | m .&. b == 0                = node (m .|. b) (insertSmallArray p (Tip k v) as)
+      | !oz <- indexSmallArray as p
+      , !z <- go k v (n - 4) oz
+      , ptrNeq z oz                 = Node m (updateSmallArray p z as)
+      | otherwise                   = on
+      where
+        b = mask k n
+        p = popCount $ m .&. (b-1)
 {-# INLINEABLE insert #-}
 
 lookup :: Key -> WordMap v -> Maybe v
-lookup k0 n0 = go k0 n0 where
-  go !_ Nil = Nothing
-  go k (Full ok o a)
-    | z > 0xf = Nothing
-    | otherwise = go k $ indexSmallArray a (fromIntegral z)
-    where z = unsafeShiftR (xor k ok) o
-  go k (Node ok o m a)
-    | z > 0xf      = Nothing
-    | m .&. b == 0 = Nothing
-    | otherwise = go k (indexSmallArray a (popCount (m .&. (b - 1))))
-    where z = unsafeShiftR (xor k ok) o
-          b = unsafeShiftL 1 (fromIntegral z)
-  go k (Tip ok ov)
-    | k == ok   = Just ov
-    | otherwise = Nothing
-{-# INLINEABLE lookup #-}
+lookup !_ Nil = Nothing
+lookup k0 (WordMap ok0 n0 on0) 
+  | wd0 > 0xf = Nothing
+  | otherwise = go k0 n0 on0
+  where
+    okk0 = xor ok0 k0
+    wd0 = unsafeShiftR okk0 n0
+    go k _ (Tip ok ov)
+      | k == ok = Just ov
+      | otherwise = Nothing
+    go k n (Full as) = go k (n-4) (indexSmallArray as (maskBit k n))
+    go k n (Node m as)
+      | m .&. b == 0 = Nothing
+      | otherwise = go k (n-4) (indexSmallArray as p)
+      where
+        b = mask k n
+        p = popCount $ m .&. (b-1)
+{-# INLINE lookup #-}
 
 member :: Key -> WordMap v -> Bool
-member !k (Full ok o a)
-  | z <- unsafeShiftR (xor k ok) o = z <= 0xf && member k (indexSmallArray a (fromIntegral z))
-member k (Node ok o m a)
-  | z <- unsafeShiftR (xor k ok) o
-  = z <= 0xf && let b = unsafeShiftL 1 (fromIntegral z) in
-    m .&. b /= 0 && member k (indexSmallArray a (popCount (m .&. (b - 1))))
-member k (Tip ok _) = k == ok
-member _ Nil = False
-{-# INLINEABLE member #-}
-
+member !_ Nil = False
+member k0 (WordMap ok0 n0 on0) = wd0 <= 0xf && go k0 n0 on0
+  where
+    okk0 = xor ok0 k0
+    wd0 = unsafeShiftR okk0 n0
+    go k _ (Tip ok _) = k == ok 
+    go k n (Full as) = go k (n-4) (indexSmallArray as (maskBit k n))
+    go k n (Node m as) = m .&. b /= 0 && go k (n-4) (indexSmallArray as p)
+      where
+        b = mask k n
+        p = popCount $ m .&. (b-1)
+{-# INLINE member #-}
+      
 updateSmallArray :: Int -> a -> SmallArray a -> SmallArray a
 updateSmallArray !k a i = runST $ do
   let n = length i
@@ -274,6 +240,7 @@ insertSmallArray !k a i = runST $ do
   unsafeFreezeSmallArray o
 {-# INLINEABLE insertSmallArray #-}
 
+{-
 deleteSmallArray :: Int -> SmallArray a -> SmallArray a
 deleteSmallArray !k i = runST $ do
   let n = length i
@@ -282,6 +249,7 @@ deleteSmallArray !k i = runST $ do
   copySmallArray o k i (k+1) (n-k-1)
   unsafeFreezeSmallArray o
 {-# INLINEABLE deleteSmallArray #-}
+-}
 
 clone16 :: SmallArray a -> ST s (SmallMutableArray s a)
 clone16 i = do
@@ -307,26 +275,35 @@ clone16 i = do
 
 -- | Build a singleton WordMap
 singleton :: Key -> v -> WordMap v
-singleton !k v = Tip k v
+singleton k v = WordMap (pretty k 0) 0 (Tip k v)
 {-# INLINE singleton #-}
 
 instance FunctorWithIndex Word64 WordMap where
-  imap f (Node k n m  as) = Node k n m (fmap (imap f) as)
-  imap f (Tip k v) = Tip k (f k v)
   imap _ Nil = Nil
-  imap f (Full k n as) = Full k n (fmap (imap f) as)
+  imap f (WordMap k n o) = WordMap k n (imap f o)
+
+instance FunctorWithIndex Word64 Node where
+  imap f (Node m  as) = Node m (fmap (imap f) as)
+  imap f (Tip k v) = Tip k (f k v)
+  imap f (Full as) = Full (fmap (imap f) as)
 
 instance FoldableWithIndex Word64 WordMap where
-  ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
-  ifoldMap f (Tip k v) = f k v
   ifoldMap _ Nil = mempty
-  ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
+  ifoldMap f (WordMap _ _ o) = ifoldMap f o
+
+instance FoldableWithIndex Word64 Node where
+  ifoldMap f (Node _ as) = foldMap (ifoldMap f) as
+  ifoldMap f (Tip k v) = f k v
+  ifoldMap f (Full as) = foldMap (ifoldMap f) as
 
 instance TraversableWithIndex Word64 WordMap where
-  itraverse f (Node k n m as) = Node k n m <$> traverse (itraverse f) as
-  itraverse f (Tip k v) = Tip k <$> f k v
+  itraverse f (WordMap k n o) = WordMap k n <$> itraverse f o
   itraverse _ Nil = pure Nil
-  itraverse f (Full k n as) = Full k n <$> traverse (itraverse f) as
+
+instance TraversableWithIndex Word64 Node where
+  itraverse f (Node m as) = Node m <$> traverse (itraverse f) as
+  itraverse f (Tip k v) = Tip k <$> f k v
+  itraverse f (Full as) = Full <$> traverse (itraverse f) as
 
 instance IsList (WordMap v) where
   type Item (WordMap v) = (Word64, v)
