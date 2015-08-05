@@ -22,7 +22,8 @@ import Data.Maybe (fromMaybe)
 import Data.Word
 import Prelude hiding (lookup, length, foldr)
 import qualified Data.IntMap as M
-import qualified FlatMap as H
+import qualified FlatMap as F
+import qualified Data.HashMap.Lazy as H
 import GHC.Exts as E
 
 main :: IO ()
@@ -30,6 +31,7 @@ main = do
     evaluate $ rnf [denseM, sparseM, sparseM']
     evaluate $ rnf [denseW, sparseW, sparseW']
     evaluate $ rnf [denseH, sparseH, sparseH']
+    evaluate $ rnf [denseF, sparseF, sparseF']
     evaluate $ rnf [elems,  sElems,  sElemsSearch]
     evaluate $ rnf [keys,   sKeys, sKeysSearch]
     evaluate $ rnf [values, sValues]
@@ -41,37 +43,44 @@ main = do
             [ bgroup "present"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 keys) denseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wkeys) denseW
-                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wkeys) denseH
+                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wkeys) denseF
+                , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wkeys) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 sKeysSearch) sparseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wsKeysSearch) sparseW
-                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wsKeysSearch) sparseH
+                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wsKeysSearch) sparseF
+                , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wsKeysSearch) sparseH
                 ]
             ]
         , bgroup "insert"
             [ bgroup "present"
                 [ bench "IntMap"  $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 elems) denseM
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 welems) denseW
-                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 welems) denseH
+                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 welems) denseF
+                , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 welems) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap" $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 sElemsSearch) sparseM
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 wsElemsSearch) sparseW
-                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 wsElemsSearch) sparseH
+                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 wsElemsSearch) sparseF
+                , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 wsElemsSearch) sparseH
                 ]
             ]
         ]
   where
     denseM = M.fromAscList elems :: M.IntMap Int
     denseW = fromList welems :: D.WordMap Word64
-    denseH = E.fromList welems :: H.WordMap Word64
+    denseF = E.fromList welems :: F.WordMap Word64
+    denseH = H.fromList welems :: H.HashMap Word64 Word64
     sparseM = M.fromAscList sElems :: M.IntMap Int
     sparseW = fromList wsElems :: D.WordMap Word64
-    sparseH = E.fromList wsElems :: H.WordMap Word64
+    sparseF = E.fromList wsElems :: F.WordMap Word64
+    sparseH = H.fromList wsElems :: H.HashMap Word64 Word64
     sparseM' = M.fromAscList sElemsSearch :: M.IntMap Int
     sparseW' = fromList wsElemsSearch :: D.WordMap Word64
-    sparseH' = E.fromList wsElemsSearch :: H.WordMap Word64
+    sparseF' = E.fromList wsElemsSearch :: F.WordMap Word64
+    sparseH' = H.fromList wsElemsSearch :: H.HashMap Word64 Word64
 
     elems = zip keys values
     keys = [1..2^12]
