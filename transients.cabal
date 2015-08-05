@@ -42,7 +42,7 @@ flag benchmark-wordmap
 
 library
   build-depends:
-    base >= 4.5 && < 5,
+    base >= 4.8 && < 5,
     deepseq,
     ghc-prim,
     lens,
@@ -70,7 +70,7 @@ test-suite doctests
     buildable: False
   else
     build-depends:
-      base,
+      base >= 4.8,
       directory      >= 1.0,
       doctest        >= 0.9.1,
       filepath,
@@ -93,8 +93,8 @@ test-suite hlint
 benchmark wordmap
   type:             exitcode-stdio-1.0
   main-is:          wordmap.hs
-  ghc-options:      -Wall -O2 -threaded
-  hs-source-dirs:   benchmarks
+  ghc-options:      -Wall -O2
+  hs-source-dirs:   benchmarks benchmarks/wordmap
   default-language: Haskell2010
   if !flag(benchmark-wordmap)
     buildable: False

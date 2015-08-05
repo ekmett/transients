@@ -22,7 +22,7 @@ import Data.Maybe (fromMaybe)
 import Data.Word
 import Prelude hiding (lookup, length, foldr)
 import qualified Data.IntMap as M
-import qualified Dumb as F
+import qualified LittleEndian as F
 import qualified Data.HashMap.Lazy as H
 import GHC.Exts as E
 
