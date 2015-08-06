@@ -92,7 +92,7 @@ mask k o = unsafeShiftL 1 (maskBit k o)
 {-# INLINE mask #-}
 
 -- | Given a pair of keys, they agree down to this height in the display, don't use this when they are the same
--- 
+--
 -- @
 -- apogeeBit k ok = unsafeShiftR (level (xor k ok)) 2
 -- level (xor k ok) = unsafeShiftL (apogeeBit k ok) 2
@@ -101,7 +101,7 @@ apogeeBit :: Key -> Key -> Int
 apogeeBit k ok = 15 - unsafeShiftR (countLeadingZeros (xor k ok)) 2
 
 apogee :: Key -> Key -> Mask
-apogee k ok = unsafeShiftL 1 (apogeeBit k ok) 
+apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 
 --------------------------------------------------------------------------------
 -- * WordMap
@@ -186,7 +186,7 @@ fork o k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|
 -- carefully retains identity in case we plug what is already there back in
 plug :: Key -> Node v -> Node v -> Node v
 -- TODO: if we're plugging Nil in we need to roll this up gracefully
-plug !k Nil on@(Node ok n m as) 
+plug !k Nil on@(Node ok n m as)
   | m .&. b == 0 = on
   | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) as)
   where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
@@ -215,7 +215,7 @@ plugPath :: Key -> Int -> Int -> Node v -> SmallArray (Node v) -> Node v
 plugPath !k !i !t !acc !ns
   | i < t     = traceShow ("plugging",i,t) $ plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
   | otherwise = acc
-  
+
 unI# :: Int -> Int#
 unI# (I# i) = i
 
@@ -226,14 +226,14 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | n0 <- level (xor ok0 k0)
   , aok <- unsafeShiftR n0 2
   , kept <- m0 .&. unsafeShiftL 0xffff aok
-  , nkept@(I# nkept#) <- max (popCount kept - 1) 0 
+  , nkept@(I# nkept#) <- max (popCount kept - 1) 0
   , !top@(I# top#) <- length ns0 - nkept
   = traceShow (k0,"kept",kept,"nkept",nkept,"top",top) $ runST $ primitive $ \s -> case go k0 nkept# (plugPath k0 0 top (maybe Nil (Tip ok0) mv0) ns0) s of
     (# s', ms, m# #) -> case traceShow ("copying","from old",I# top#,"to new",I# (sizeofSmallMutableArray# ms -# nkept#), "count",I# nkept#) (copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept#) s' of -- we're copying nkept
       s'' -> case unsafeFreezeSmallArray# ms s'' of
-        (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #) 
+        (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #)
   where
-    deep :: Key -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s -> 
+    deep :: Key -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s ->
       (# State# s, SmallMutableArray# s (Node v), Word# #)
     deep k h# as d# on n# s = case indexSmallArray# as d# of
       (# on' #) -> case go k (h# +# 1#) on' s of
@@ -241,14 +241,14 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
           s'' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
             W16# m'# -> (# s'', ms, m'# #)
 
-    shallow :: Int# -> Node v -> Int# -> State# s -> 
+    shallow :: Int# -> Node v -> Int# -> State# s ->
       (# State# s, SmallMutableArray# s (Node v), Word# #)
     shallow h# on n# s = case traceShow ("path shallow",I# h#) (newSmallArray# (h# +# 1#) on) s of
       (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
           W16# m# -> (# s', ms, m# #)
 
     go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
-    go k h# on@(Full ok n@(I# n#) (SmallArray as)) s 
+    go k h# on@(Full ok n@(I# n#) (SmallArray as)) s
       | wd > 0xf = let n' = level okk in shallow h# (Stub k n' on) (unI# n') s -- we're a sibling of what we recursed into
       | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s -- recurse deep
       where !okk = xor k ok
@@ -261,13 +261,13 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
     go k h# on@(Tip ok _) s = shallow h# (Stub k n on) (unI# n) s -- note: k /= ok due to startup
-      where n = level (xor k ok) 
+      where n = level (xor k ok)
     go k h# Nil s = case traceShow (k,"path: Nil",I# h#) (newSmallArray# h# (error "path: nil")) s of
       (# s', ms #) -> (# s', ms, int2Word# 0# #)
     go _ _ Stub{} _ = error "path: unexpected Stub"
 
 insert :: Key -> v -> WordMap v -> WordMap v
-insert k v wm@(WordMap p@(Path ok _ _) mv) 
+insert k v wm@(WordMap p@(Path ok _ _) mv)
   | k == ok, Just ov <- mv, ptrEq v ov = wm
   | otherwise = WordMap (path k wm) (Just v)
 
