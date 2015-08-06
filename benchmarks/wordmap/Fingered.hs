@@ -10,10 +10,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE UnboxedTuples #-}
-{-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults #-}
-#ifdef ST_HACK
-{-# OPTIONS_GHC -fno-full-laziness #-}
-#endif
+{-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults -fobject-code #-}
 --------------------------------------------------------------------------------
 -- |
 -- Copyright   : (c) Edward Kmett 2015
@@ -32,6 +29,7 @@
 --
 --------------------------------------------------------------------------------
 module Fingered
+{-
   ( Node
   , singleton
   , empty
@@ -40,7 +38,7 @@ module Fingered
   , lookup
   -- , member
   , fromList
-  ) where
+  ) -} where
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
@@ -53,6 +51,7 @@ import Data.Foldable
 import Data.Functor
 import Data.Monoid
 import Data.Word
+import Debug.Trace
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
 import GHC.Exts
@@ -79,9 +78,9 @@ index :: Word16 -> Word16 -> Int
 index m b = popCount (m .&. (b-1))
 {-# INLINE index #-}
 
--- | Note: @level k k@ will return a negative shift, don't use it
-level :: Key -> Key -> Int
-level k ok = 60 - (countLeadingZeros (xor k ok) .&. 0x7c)
+-- | Note: @level (xor k ok)@ will return a negative shift, don't use it
+level :: Key -> Int
+level okk = 60 - (countLeadingZeros okk .&. 0x7c)
 {-# INLINE level #-}
 
 maskBit :: Key -> Offset -> Int
@@ -91,6 +90,18 @@ maskBit k o = fromIntegral (unsafeShiftR k o .&. 0xf)
 mask :: Key -> Offset -> Word16
 mask k o = unsafeShiftL 1 (maskBit k o)
 {-# INLINE mask #-}
+
+-- | Given a pair of keys, they agree down to this height in the display, don't use this when they are the same
+-- 
+-- @
+-- apogeeBit k ok = unsafeShiftR (level (xor k ok)) 2
+-- level (xor k ok) = unsafeShiftL (apogeeBit k ok) 2
+-- @
+apogeeBit :: Key -> Key -> Int
+apogeeBit k ok = 15 - unsafeShiftR (countLeadingZeros (xor k ok)) 2
+
+apogee :: Key -> Key -> Mask
+apogee k ok = unsafeShiftL 1 (apogeeBit k ok) 
 
 --------------------------------------------------------------------------------
 -- * WordMap
@@ -127,17 +138,6 @@ data Node v
 --------------------------------------------------------------------------------
 -- * Lookup
 --------------------------------------------------------------------------------
-
--- | Given a pair of keys, they agree down to this height in the display, don't use this when they are the same
--- 
--- @
--- apogeeBit k ok = unsafeShiftR (level k ok) 2
--- @
-apogeeBit :: Key -> Key -> Int
-apogeeBit k ok = 15 - unsafeShiftR (countLeadingZeros (xor k ok)) 2
-
-apogee :: Key -> Key -> Mask
-apogee k ok = unsafeShiftL 1 (apogeeBit k ok) 
 
 lookup :: Word64 -> WordMap v -> Maybe v
 lookup k0 m0 = case m0 of
@@ -189,33 +189,32 @@ plug :: Key -> Node v -> Node v -> Node v
 plug !k Nil on@(Node ok n m as) 
   | m .&. b == 0 = on
   | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) as)
-  where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
+  where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
 plug k z on@(Node ok n m as)
   | m .&. b == 0 = node ok n (m .|. b) (insertSmallArray odm z as)
   | !oz <- indexSmallArray as odm
   , ptrNeq z oz = Node ok n m (updateSmallArray odm z as)
   | otherwise   = on
-  where !b   = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
+  where !b   = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
         !odm = index m b
 plug k Nil (Full ok n as) = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray d as)
-  where !d = fromIntegral (unsafeShiftR (xor ok k) n)
+  where !d = fromIntegral (unsafeShiftR (xor k ok) n)
 plug k z on@(Full ok n as)
   | !oz <- indexSmallArray as d
   , ptrNeq z oz = Full ok n (update16 d z as)
   | otherwise   = on
-  where !d = fromIntegral (unsafeShiftR (xor ok k) n)
+  where !d = fromIntegral (unsafeShiftR (xor k ok) n)
 plug k Nil (Stub _ _ on)  = on
 plug k z   (Stub ok n on) = fork n k z ok on
 plug _ _   Tip{} = error "plug: unexpected Tip"
 plug _ _   Nil   = error "plug: unexpected Nil"
 
--- | Given a @key@ located under @acc@, @plugPath key h ns acc@ plugs acc recursively into each of the nodes
--- ns from [t..length ns-1] from the bottom up
-plugPath :: Key -> Int -> SmallArray (Node v) -> Node v -> Node v
-plugPath k0 top0 ns0 acc = go k0 top0 ns0 (length ns0 - 1) acc where 
-  go !k !t !ns !i !acc
-    | i < t     = acc
-    | otherwise = go k t ns (i-1) (plug k acc (indexSmallArray ns i))
+-- | Given @k@ located under @acc@, @plugPath k i t acc ns@ plugs acc recursively into each of the nodes
+-- of @ns@ from @[i..t-1]@ from the bottom up
+plugPath :: Key -> Int -> Int -> Node v -> SmallArray (Node v) -> Node v
+plugPath !k !i !t !acc !ns
+  | i < t     = plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
+  | otherwise = acc
   
 unI# :: Int -> Int#
 unI# (I# i) = i
@@ -224,13 +223,13 @@ unI# (I# i) = i
 path :: Key -> WordMap v -> Path v
 path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | k0 == ok0 = p0
-  | n0 <- level ok0 k0 
+  | n0 <- level (xor ok0 k0)
   , aok <- unsafeShiftR n0 2
-  , kept <- m0 .&. unsafeShiftL 0xffff aok
-  , top <- popCount kept
-  , root <- plugPath k0 top ns0 (maybe Nil (Tip k0) mv0)
-  = runST $ primitive $ \s -> case go k0 (unI# n0) root s of
-    (# s', ms, m# #) -> case copySmallArray# ns0# 0# ms 0# (unI# (top-1)) s' of
+  , kept <- m0 .&. unsafeShiftL 0xfffe aok
+  , nkept@(I# nkept#) <- popCount kept -- max (popCount kept - 1) 0 
+  , !top@(I# top#) <- length ns0 - nkept
+  = runST $ primitive $ \s -> case go k0 (unI# n0) (plugPath k0 0 top (maybe Nil (Tip k0) mv0) ns0) s of
+    (# s', ms, m# #) -> case copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
       s'' -> case unsafeFreezeSmallArray# ms s'' of
         (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #) 
   where
@@ -242,13 +241,13 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
 
     cont2 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> Word# -> State# s -> 
       (# State# s, SmallMutableArray# s (Node v), Word# #)
-    cont2 ms h# on n# m# s = case writeSmallArray# ms h# on s of
+    cont2 ms h# on n# m# s = case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h#) on s of -- we need to write into the bottom, not the top
       s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
         W16# m'# -> (# s', ms, m'# #)
 
     cont3 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> State# s -> 
       (# State# s, SmallMutableArray# s (Node v), Word# #)
-    cont3 ms h# on n# s = case writeSmallArray# ms h# on s of
+    cont3 ms h# on n# s = case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h#) on s of -- we need to write into the bottom, not the top
       s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
         W16# m'# -> (# s', ms, m'# #)
 
@@ -257,19 +256,20 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
       | wd <= 0xf = cont1 k h# as (unI# (fromIntegral wd)) on n# s
       | otherwise = case newSmallArray# (h# +# 1#) undefined s of
         (# s', ms #) -> cont3 ms h# on n# s'
-      where wd = unsafeShiftR (xor ok k) n
+      where wd = unsafeShiftR (xor k ok) n
     go k h# on@(Node ok n@(I# n#) m (SmallArray as)) s
       | m .&. b /= 0 = cont1 k h# as (unI# (index m b)) on n# s
       | otherwise = case newSmallArray# (h# +# 1#) undefined s of
         (# s', ms #)
-          | b == 0    -> cont3 ms h# (Stub ok (level k ok) on) n# s'
+          | b == 0    -> cont3 ms h# (Stub ok (level okk) on) n# s'
           | otherwise -> cont3 ms h# on n# s'
-      where b = shiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
+      where okk = xor k ok
+            b = shiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
     go k h# on@(Tip ok ov) s
       | k == ok = case newSmallArray# h# undefined s of
         (# s', ms #) -> (# s', ms, int2Word# 0# #) 
       | otherwise = case newSmallArray# (h# +# 1#) undefined s of 
-        (# s', ms #) -> let n = level k ok in cont3 ms h# (Stub ok n on) (unI# n) s'
+        (# s', ms #) -> let n = level (xor k ok) in cont3 ms h# (Stub ok n on) (unI# n) s'
     go k h# Nil s = case newSmallArray# h# undefined s of
       (# s', ms #) -> (# s', ms, int2Word# 0# #)
     go _ _ Stub{} _ = error "path: unexpected Stub"
