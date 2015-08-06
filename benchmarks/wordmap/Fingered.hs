@@ -38,7 +38,7 @@ module Fingered
   , insert
   , delete
   , lookup
-  , member
+  -- , member
   , fromList
   ) where
 
@@ -46,6 +46,7 @@ import Control.Applicative hiding (empty)
 import Control.DeepSeq
 import Control.Lens hiding (index)
 import Control.Monad.ST hiding (runST)
+import Control.Monad.Primitive
 import Data.Bits
 import Data.Transient.Primitive.SmallArray
 import Data.Foldable
@@ -56,7 +57,7 @@ import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
 import GHC.Exts
 import GHC.ST
-import GHC.Types
+import GHC.Word
 
 type Key = Word64
 type Mask = Word16
@@ -73,10 +74,6 @@ ptrEq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts.==# 1#)
 ptrNeq :: a -> a -> Bool
 ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
 {-# INLINEABLE ptrNeq #-}
-
-clampedIndex :: SmallArray a -> Int -> a
-clampedIndex ns i = indexSmallArray ns (min i (length n - 1))
-{-# INLINE clampedIndex #-}
 
 index :: Word16 -> Word16 -> Int
 index m b = popCount (m .&. (b-1))
@@ -108,7 +105,12 @@ data WordMap v = WordMap !(Path v) !(Maybe v)
   deriving (Functor,Foldable,Traversable,Show)
 
 empty :: WordMap v
-empty = WordMap (Path 0 mempty) Nothing
+empty = WordMap (Path 0 0 mempty) Nothing
+
+-- | Build a singleton Node
+singleton :: Key -> v -> WordMap v
+singleton k v = WordMap (Path k 0 mempty) (Just v)
+{-# INLINE singleton #-}
 
 -- we can broadcast the key, then compare in parallel with SWAR techniques
 -- then we just have to search the appropriate array entries on down
@@ -126,12 +128,16 @@ data Node v
 -- * Lookup
 --------------------------------------------------------------------------------
 
--- given a pair of keys, they agree down to this height in the display, don't use when they are the same
+-- | Given a pair of keys, they agree down to this height in the display, don't use this when they are the same
+-- 
+-- @
+-- apogeeBit k ok = unsafeShiftR (level k ok) 2
+-- @
 apogeeBit :: Key -> Key -> Int
 apogeeBit k ok = 15 - unsafeShiftR (countLeadingZeros (xor k ok)) 2
 
 apogee :: Key -> Key -> Mask
-apogee k ok = unsafeShiftL (apogeeBit k ok)
+apogee k ok = unsafeShiftL 1 (apogeeBit k ok) 
 
 lookup :: Word64 -> WordMap v -> Maybe v
 lookup k0 m0 = case m0 of
@@ -182,7 +188,7 @@ plug :: Key -> Node v -> Node v -> Node v
 -- TODO: if we're plugging Nil in we need to roll this up gracefully
 plug !k Nil on@(Node ok n m as) 
   | m .&. b == 0 = on
-  | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) z as)
+  | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) as)
   where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
 plug k z on@(Node ok n m as)
   | m .&. b == 0 = node ok n (m .|. b) (insertSmallArray odm z as)
@@ -191,8 +197,9 @@ plug k z on@(Node ok n m as)
   | otherwise   = on
   where !b   = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
         !odm = index m b
-plug k Nil (Full ok n m as) = Node ok n (complement (unsafeShiftL 1 b)) (deleteSmallArray d as)
-plug k z on@(Full ok n m as)
+plug k Nil (Full ok n as) = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray d as)
+  where !d = fromIntegral (unsafeShiftR (xor ok k) n)
+plug k z on@(Full ok n as)
   | !oz <- indexSmallArray as d
   , ptrNeq z oz = Full ok n (update16 d z as)
   | otherwise   = on
@@ -215,57 +222,57 @@ unI# (I# i) = i
 
 -- create a 1-hole context at key k, destroying any previous contents of that position.
 path :: Key -> WordMap v -> Path v
-path k0 (WordMap p0@(Path ok0 m0 ns0) mv0)
-  | k == ok = p
-  | otherwise = runST $ primitive $ \s -> case go k0 v0 0 n s of
-    (# ms, m#, s' #) -> case copySmallArray# ns 0 ms 0 (top-1) s' of
-      s'' -> case unsafeFreezeSmallMutableArray# ms s'' of
-        (# spine, s''' #) -> (# Path k0 (kept .|. W16# m#) (SmallArray spine), s''' #) 
-     where
-      !aok = apogeeBit k ok
-      !kept = m .&. unsafeShiftL 0xffffffffffffffff aok
-      !top = popCount kept
-      !root = plugPath top ns
+path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
+  | k0 == ok0 = p0
+  | n0 <- level ok0 k0 
+  , aok <- unsafeShiftR n0 2
+  , kept <- m0 .&. unsafeShiftL 0xffff aok
+  , top <- popCount kept
+  , root <- plugPath k0 top ns0 (maybe Nil (Tip k0) mv0)
+  = runST $ primitive $ \s -> case go k0 (unI# n0) root s of
+    (# s', ms, m# #) -> case copySmallArray# ns0# 0# ms 0# (unI# (top-1)) s' of
+      s'' -> case unsafeFreezeSmallArray# ms s'' of
+        (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #) 
   where
-    cont1 :: Key -> v -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s -> 
-      (# SmallMutableArray# s a, Word#, State# s #)
-    cont1 k v h# as d on n# s = case indexSmallArray# as d# of
-      (# on' #) -> case go k v (h# +# 1#) on' s of
-        (# ms, m#, s' #) -> cont2 ms h# on n# m# s'
+    cont1 :: Key -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s -> 
+      (# State# s, SmallMutableArray# s (Node v), Word# #)
+    cont1 k h# as d# on n# s = case indexSmallArray# as d# of
+      (# on' #) -> case go k (h# +# 1#) on' s of
+        (# s', ms, m# #) -> cont2 ms h# on n# m# s'
 
-    cont2 :: SmallMutableArray# s a -> Int# -> Node v -> Int# -> Word# -> State# s -> 
-      (# SmallMutableArray s a, Word#, State# s #)
-    cont2 ms h# on n m# s = case writeSmallMutableArray# ms h# on s' of
-      s'' -> case unsafeShiftL 1 (unsafeShiftR n 2) .|. W16# m# of
-        W16# m'# -> (# ms, m'#, s'' #)
+    cont2 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> Word# -> State# s -> 
+      (# State# s, SmallMutableArray# s (Node v), Word# #)
+    cont2 ms h# on n# m# s = case writeSmallArray# ms h# on s of
+      s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
+        W16# m'# -> (# s', ms, m'# #)
 
-    cont3 :: SmallMutableArray# s a -> Int# -> Node v -> Int# -> State# s -> 
-      (# SmallMutableArray s a, Word#, State# s #)
-    cont3 ms h# on n s = case writeSmallMutableArray# ms h# on s' of
-      s'' -> case unsafeShiftL 1 (unsafeShiftR n 2) of
-        W16# m'# -> (# ms, m'#, s'' #)
+    cont3 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> State# s -> 
+      (# State# s, SmallMutableArray# s (Node v), Word# #)
+    cont3 ms h# on n# s = case writeSmallArray# ms h# on s of
+      s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
+        W16# m'# -> (# s', ms, m'# #)
 
-    go :: Key -> v -> Int# -> Node v -> State# s -> (# SmallMutableArray# s a, Word#, State# s #)
-    go k v h# on@(Full ok n@(I# n#) (SmallArray as)) s 
-      | wd <= 0xf = cont1 k v h# as (unI# (fromIntegral wd)) on n# 0# s
+    go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
+    go k h# on@(Full ok n@(I# n#) (SmallArray as)) s 
+      | wd <= 0xf = cont1 k h# as (unI# (fromIntegral wd)) on n# s
       | otherwise = case newSmallArray# (h# +# 1#) undefined s of
-        (# ms, s' #) -> cont3 ms h# on n# s'
+        (# s', ms #) -> cont3 ms h# on n# s'
       where wd = unsafeShiftR (xor ok k) n
-    go k v h# on@(Node ok n@(I# n#) m (SmallArray as)) s
-      | m .&. b /= 0 = cont1 k v h# as (unI# (index m b)) on n# s
+    go k h# on@(Node ok n@(I# n#) m (SmallArray as)) s
+      | m .&. b /= 0 = cont1 k h# as (unI# (index m b)) on n# s
       | otherwise = case newSmallArray# (h# +# 1#) undefined s of
-        (# ms, s' #)
+        (# s', ms #)
           | b == 0    -> cont3 ms h# (Stub ok (level k ok) on) n# s'
           | otherwise -> cont3 ms h# on n# s'
       where b = shiftL 1 (fromIntegral (unsafeShiftR (xor ok k) n))
-    go k v h# on@(Tip ok ov) s
+    go k h# on@(Tip ok ov) s
       | k == ok = case newSmallArray# h# undefined s of
-         (# ms, s' #) -> (# ms, 0#, s' #) 
-      | otherwise = case newSmallArray# (h# + 1#) undefined s of 
-         (# ms, s' #) -> let n = level k ok in cont3 ms h# (Stub ok n on) (unI# n) s'
-    go k v h# Nil s = case newSmallArray# h# undefined s of
-         (# ms, s' #) -> (# ms, 0#, s' #)
-    go _ _ _ Stub{} _ = error "path: unexpected Stub"
+        (# s', ms #) -> (# s', ms, int2Word# 0# #) 
+      | otherwise = case newSmallArray# (h# +# 1#) undefined s of 
+        (# s', ms #) -> let n = level k ok in cont3 ms h# (Stub ok n on) (unI# n) s'
+    go k h# Nil s = case newSmallArray# h# undefined s of
+      (# s', ms #) -> (# s', ms, int2Word# 0# #)
+    go _ _ Stub{} _ = error "path: unexpected Stub"
 
 insert :: Key -> v -> WordMap v -> WordMap v
 insert k v wm@(WordMap p@(Path ok _ _) mv) 
@@ -279,11 +286,19 @@ delete k m = WordMap (path k m) Nothing
 -- * Instances
 --------------------------------------------------------------------------------
 
+type instance Index (WordMap a) = Word64
+type instance IxValue (WordMap a) = a
+
 instance At (WordMap v) where
   at k f wm@(WordMap p@(Path ok _ _) mv)
     | k == ok = WordMap p <$> f mv
     | otherwise = let c = path k wm in WordMap c <$> f (lookup k wm)
   {-# INLINE at #-}
+
+instance Ixed (WordMap v) where
+  ix k f wm = case lookup k wm of
+    Nothing -> pure wm
+    Just v -> let c = path k wm in f v <&> \v' -> WordMap c (Just v')
 
 instance NFData v => NFData (Node v) where
   rnf (Full _ _ a)   = rnf a
@@ -295,28 +310,11 @@ instance NFData v => NFData (Node v) where
 instance NFData v => NFData (WordMap v) where
   rnf (WordMap (Path _ _ as) mv) = rnf as `seq` rnf mv
 
-instance AsEmpty (Node a) where
-  _Empty = prism (const Nil) $ \s -> case s of
-    Nil -> Right ()
-    t -> Left t
-
 instance AsEmpty (WordMap a) where
   _Empty = prism (const empty) $ \s -> case s of
     WordMap (Path _ 0 _) Nothing -> Right ()
     t -> Left t
 
-type instance Index (Node a) = Word64
-type instance IxValue (Node a) = a
-
-instance Ixed (Node a) where
-  ix i f m = case lookup i m of
-    Just a -> f a <&> \a' -> insert i a' m
-    Nothing -> pure m
-
-instance At (Node a) where
-  at i f m = f (lookup i m) <&> \case
-    Nothing -> delete i m
-    Just a -> insert i a m
 
 updateSmallArray :: Int -> a -> SmallArray a -> SmallArray a
 updateSmallArray !k a i = runST $ do
@@ -374,10 +372,6 @@ clone16 i = do
   return o
 {-# INLINE clone16 #-}
 
--- | Build a singleton Node
-singleton :: Key -> v -> Node v
-singleton k v = WordMap (Path k 0 empty) (Just v)
-{-# INLINE singleton #-}
 
 instance FunctorWithIndex Word64 WordMap where
   imap f (WordMap (Path k n as) mv) = WordMap (Path k n (fmap (imap f) as)) (fmap (f k) mv)
@@ -387,33 +381,25 @@ instance FunctorWithIndex Word64 Node where
   imap f (Tip k v) = Tip k (f k v)
   imap _ Nil = Nil
   imap f (Full k n as) = Full k n (fmap (imap f) as)
-  imap f (Stub k n a) = Stub n (imap f a)
+  imap f (Stub k n a) = Stub k n (imap f a)
 
 instance FoldableWithIndex Word64 WordMap where
-  ifoldMap f (WordMap (Path k _ as) mv) = foldMap (f k) mv `mappend` ifoldMap f as
+  ifoldMap f (WordMap (Path k _ as) mv) = foldMap (f k) mv `mappend` foldMap (ifoldMap f) as
 
 instance FoldableWithIndex Word64 Node where
   ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
   ifoldMap f (Tip k v) = f k v
   ifoldMap _ Nil = mempty
   ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
-  ifoldMap f (Stub _ _ n) = ifoldMap f n
+  ifoldMap f (Stub _ _ a) = ifoldMap f a
 
-{-
-instance TraversableWithIndex Word64 Node where
-  itraverse f (Node k n m as) = Node k n m <$> traverse (itraverse f) as
-  itraverse f (Tip k v) = Tip k <$> f k v
-  itraverse _ Nil = pure Nil
-  itraverse f (Full k n as) = Full k n <$> traverse (itraverse f) as
--}
-
-instance IsList (Node v) where
-  type Item (Node v) = (Word64, v)
+instance IsList (WordMap v) where
+  type Item (WordMap v) = (Word64, v)
 
   toList = ifoldr (\i a r -> (i, a): r) []
   {-# INLINE toList #-}
 
-  fromList xs = foldl' (\r (k,v) -> insert k v r) Nil xs
+  fromList xs = foldl' (\r (k,v) -> insert k v r) empty xs
   {-# INLINE fromList #-}
 
   fromListN _ = fromList
