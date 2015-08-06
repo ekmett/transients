@@ -42,7 +42,7 @@ module Fingered
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
-import Control.Lens hiding (index)
+import Control.Lens hiding (index, deep)
 import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
@@ -131,7 +131,6 @@ data Node v
   | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask {-# UNPACK #-} !(SmallArray (Node v))
   | Stub {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(Node v)
   | Tip  {-# UNPACK #-} !Key v
-  | Nil -- only used in canonical form
   deriving (Functor,Foldable,Traversable,Show)
   -- TODO: manual Foldable
 
@@ -158,13 +157,12 @@ lookup k0 m0 = case m0 of
       where z = unsafeShiftR (xor k ok) o
             b = unsafeShiftL 1 (fromIntegral z)
     go k (Stub ok o on)
-      | z > 0xf   = Nothing
+      | z > 0     = Nothing
       | otherwise = go k on
       where z = unsafeShiftR (xor k ok) o
     go k (Tip ok ov)
       | k == ok   = Just ov
       | otherwise = Nothing
-    go _ Nil      = Nothing
 {-# INLINEABLE lookup #-}
 
 --------------------------------------------------------------------------------
@@ -176,20 +174,27 @@ node k o 0xffff a = Full k o a
 node k o m a      = Node k o m a
 {-# INLINE node #-}
 
-fork :: Int -> Key -> Node v -> Key -> Node v -> Node v
+fork :: Offset -> Key -> Node v -> Key -> Node v -> Node v
 fork o k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) $ runST $ do
   arr <- newSmallArray 2 n
   writeSmallArray arr (fromEnum (k < ok)) on
   unsafeFreezeSmallArray arr
 
+-- O(1) remove a key from a given node, one level
+unplug :: Key -> Node v -> Node v
+unplug !k on@(Node ok n m as)
+  | m .&. b == 0 = on
+  | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) as)
+  -- TODO: check to ensure this doesn't become a Tip!
+  where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
+unplug k (Full ok n as) = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray d as)
+  where !d = fromIntegral (unsafeShiftR (xor k ok) n)
+unplug _ (Stub _ _ on)  = on
+unplug _ Tip{} = error "unplugging a Tip"
+
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
 plug :: Key -> Node v -> Node v -> Node v
--- TODO: if we're plugging Nil in we need to roll this up gracefully
-plug !k Nil on@(Node ok n m as)
-  | m .&. b == 0 = on
-  | otherwise = Node ok n (m .&. complement b) (deleteSmallArray (index m b) as)
-  where !b = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
 plug k z on@(Node ok n m as)
   | m .&. b == 0 = node ok n (m .|. b) (insertSmallArray odm z as)
   | !oz <- indexSmallArray as odm
@@ -197,17 +202,13 @@ plug k z on@(Node ok n m as)
   | otherwise   = on
   where !b   = unsafeShiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
         !odm = index m b
-plug k Nil (Full ok n as) = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray d as)
-  where !d = fromIntegral (unsafeShiftR (xor k ok) n)
 plug k z on@(Full ok n as)
   | !oz <- indexSmallArray as d
   , ptrNeq z oz = Full ok n (update16 d z as)
   | otherwise   = on
   where !d = fromIntegral (unsafeShiftR (xor k ok) n)
-plug k Nil (Stub _ _ on)  = on
-plug k z   (Stub ok n on) = fork n k z ok on
-plug _ _   Tip{} = error "plug: unexpected Tip"
-plug _ _   Nil   = error "plug: unexpected Nil"
+plug k z (Stub ok n on) = fork n k z ok on
+plug _ _ Tip{} = error "plug: unexpected Tip"
 
 -- | Given @k@ located under @acc@, @plugPath k i t acc ns@ plugs acc recursively into each of the nodes
 -- of @ns@ from @[i..t-1]@ from the bottom up
@@ -216,6 +217,10 @@ plugPath !k !i !t !acc !ns
   | i < t     = traceShow ("plugging",i,t) $ plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
   | otherwise = acc
 
+-- this recurses into @plugPath@ deliberately.
+unplugPath :: Key -> Int -> Int -> SmallArray (Node v) -> Node v
+unplugPath !k !i !t !ns = traceShow ("unplugging",i,t) $ plugPath k (i+1) t (unplug k (indexSmallArray ns i)) ns
+
 unI# :: Int -> Int#
 unI# (I# i) = i
 
@@ -223,13 +228,21 @@ unI# (I# i) = i
 path :: Key -> WordMap v -> Path v
 path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | k0 == ok0 = p0 -- keys match, easy money
+  | m0 == 0 = case mv0 of
+    Nothing -> Path k0 0 mempty
+    Just v
+      | n0 <- level (xor ok0 k0), aok <- unsafeShiftR n0 2
+      -> Path k0 (unsafeShiftL 1 aok) $ runST (newSmallArray 1 (Stub ok0 n0 (Tip ok0 v)) >>= unsafeFreezeSmallArray)
   | n0 <- level (xor ok0 k0)
   , aok <- unsafeShiftR n0 2
   , kept <- m0 .&. unsafeShiftL 0xffff aok
   , nkept@(I# nkept#) <- max (popCount kept - 1) 0
   , !top@(I# top#) <- length ns0 - nkept
-  = traceShow (k0,"kept",kept,"nkept",nkept,"top",top) $ runST $ primitive $ \s -> case go k0 nkept# (plugPath k0 0 top (maybe Nil (Tip ok0) mv0) ns0) s of
-    (# s', ms, m# #) -> case traceShow ("copying","from old",I# top#,"to new",I# (sizeofSmallMutableArray# ms -# nkept#), "count",I# nkept#) (copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept#) s' of -- we're copying nkept
+  , !root <- (case mv0 of
+      Just v -> plugPath k0 0 top (Tip ok0 v) ns0
+      Nothing -> unplugPath k0 0 top ns0)
+  = runST $ primitive $ \s -> case go k0 nkept# root s of
+    (# s', ms, m# #) -> case copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
       s'' -> case unsafeFreezeSmallArray# ms s'' of
         (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #)
   where
@@ -243,31 +256,29 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
 
     shallow :: Int# -> Node v -> Int# -> State# s ->
       (# State# s, SmallMutableArray# s (Node v), Word# #)
-    shallow h# on n# s = case traceShow ("path shallow",I# h#) (newSmallArray# (h# +# 1#) on) s of
+    shallow h# on n# s = case newSmallArray# h# on s of
       (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
           W16# m# -> (# s', ms, m# #)
 
     go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
     go k h# on@(Full ok n@(I# n#) (SmallArray as)) s
-      | wd > 0xf = let n' = level okk in shallow h# (Stub k n' on) (unI# n') s -- we're a sibling of what we recursed into
+      | wd > 0xf = let n' = level okk in shallow h# (Stub ok n' on) (unI# n') s -- we're a sibling of what we recursed into
       | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s -- recurse deep
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
     go k h# on@(Node ok n@(I# n#) m (SmallArray as)) s
-      | wd > 0xf = let n' = level okk in shallow h# (Stub k n' on) (unI# n') s
+      | wd > 0xf = let n' = level okk in shallow h# (Stub ok n' on) (unI# n') s
       | otherwise = let b = unsafeShiftL 1 (fromIntegral wd) in if
         | m .&. b /= 0 -> deep k h# as (unI# (index m b)) on n# s -- recurse deep
         | otherwise    -> shallow h# on n# s
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
-    go k h# on@(Tip ok _) s = shallow h# (Stub k n on) (unI# n) s -- note: k /= ok due to startup
+    go k h# on@(Tip ok _) s = shallow h# (Stub ok n on) (unI# n) s -- note: k /= ok due to startup
       where n = level (xor k ok)
-    go k h# Nil s = case traceShow (k,"path: Nil",I# h#) (newSmallArray# h# (error "path: nil")) s of
-      (# s', ms #) -> (# s', ms, int2Word# 0# #)
     go _ _ Stub{} _ = error "path: unexpected Stub"
 
 insert :: Key -> v -> WordMap v -> WordMap v
-insert k v wm@(WordMap p@(Path ok _ _) mv)
+insert k v wm@(WordMap (Path ok _ _) mv)
   | k == ok, Just ov <- mv, ptrEq v ov = wm
   | otherwise = WordMap (path k wm) (Just v)
 
@@ -297,7 +308,7 @@ instance NFData v => NFData (Node v) where
   rnf (Node _ _ _ a) = rnf a
   rnf (Tip _ v)      = rnf v
   rnf (Stub _ _ n)   = rnf n
-  rnf Nil            = ()
+  -- rnf Nil            = ()
 
 instance NFData v => NFData (WordMap v) where
   rnf (WordMap (Path _ _ as) mv) = rnf as `seq` rnf mv
@@ -371,7 +382,6 @@ instance FunctorWithIndex Word64 WordMap where
 instance FunctorWithIndex Word64 Node where
   imap f (Node k n m as) = Node k n m (fmap (imap f) as)
   imap f (Tip k v) = Tip k (f k v)
-  imap _ Nil = Nil
   imap f (Full k n as) = Full k n (fmap (imap f) as)
   imap f (Stub k n a) = Stub k n (imap f a)
 
@@ -381,7 +391,6 @@ instance FoldableWithIndex Word64 WordMap where
 instance FoldableWithIndex Word64 Node where
   ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
   ifoldMap f (Tip k v) = f k v
-  ifoldMap _ Nil = mempty
   ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
   ifoldMap f (Stub _ _ a) = ifoldMap f a
 
