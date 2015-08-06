@@ -213,7 +213,7 @@ plug _ _   Nil   = error "plug: unexpected Nil"
 -- of @ns@ from @[i..t-1]@ from the bottom up
 plugPath :: Key -> Int -> Int -> Node v -> SmallArray (Node v) -> Node v
 plugPath !k !i !t !acc !ns
-  | i < t     = plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
+  | i < t     = traceShow ("plugging",i,t) $ plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
   | otherwise = acc
   
 unI# :: Int -> Int#
@@ -222,55 +222,47 @@ unI# (I# i) = i
 -- create a 1-hole context at key k, destroying any previous contents of that position.
 path :: Key -> WordMap v -> Path v
 path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
-  | k0 == ok0 = p0
+  | k0 == ok0 = p0 -- keys match, easy money
   | n0 <- level (xor ok0 k0)
   , aok <- unsafeShiftR n0 2
-  , kept <- m0 .&. unsafeShiftL 0xfffe aok
-  , nkept@(I# nkept#) <- popCount kept -- max (popCount kept - 1) 0 
+  , kept <- m0 .&. unsafeShiftL 0xffff aok
+  , nkept@(I# nkept#) <- max (popCount kept - 1) 0 
   , !top@(I# top#) <- length ns0 - nkept
-  = runST $ primitive $ \s -> case go k0 (unI# n0) (plugPath k0 0 top (maybe Nil (Tip k0) mv0) ns0) s of
-    (# s', ms, m# #) -> case copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
+  = traceShow (k0,"kept",kept,"nkept",nkept,"top",top) $ runST $ primitive $ \s -> case go k0 nkept# (plugPath k0 0 top (maybe Nil (Tip ok0) mv0) ns0) s of
+    (# s', ms, m# #) -> case traceShow ("copying","from old",I# top#,"to new",I# (sizeofSmallMutableArray# ms -# nkept#), "count",I# nkept#) (copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept#) s' of -- we're copying nkept
       s'' -> case unsafeFreezeSmallArray# ms s'' of
         (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #) 
   where
-    cont1 :: Key -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s -> 
+    deep :: Key -> Int# -> SmallArray# (Node v) -> Int# -> Node v -> Int# -> State# s -> 
       (# State# s, SmallMutableArray# s (Node v), Word# #)
-    cont1 k h# as d# on n# s = case indexSmallArray# as d# of
+    deep k h# as d# on n# s = case indexSmallArray# as d# of
       (# on' #) -> case go k (h# +# 1#) on' s of
-        (# s', ms, m# #) -> cont2 ms h# on n# m# s'
+        (# s', ms, m# #) -> case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h# -# 1#) on s' of
+          s'' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
+            W16# m'# -> (# s'', ms, m'# #)
 
-    cont2 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> Word# -> State# s -> 
+    shallow :: Int# -> Node v -> Int# -> State# s -> 
       (# State# s, SmallMutableArray# s (Node v), Word# #)
-    cont2 ms h# on n# m# s = case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h#) on s of -- we need to write into the bottom, not the top
-      s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
-        W16# m'# -> (# s', ms, m'# #)
-
-    cont3 :: SmallMutableArray# s (Node v) -> Int# -> Node v -> Int# -> State# s -> 
-      (# State# s, SmallMutableArray# s (Node v), Word# #)
-    cont3 ms h# on n# s = case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h#) on s of -- we need to write into the bottom, not the top
-      s' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
-        W16# m'# -> (# s', ms, m'# #)
+    shallow h# on n# s = case traceShow ("path shallow",I# h#) (newSmallArray# (h# +# 1#) on) s of
+      (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
+          W16# m# -> (# s', ms, m# #)
 
     go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
     go k h# on@(Full ok n@(I# n#) (SmallArray as)) s 
-      | wd <= 0xf = cont1 k h# as (unI# (fromIntegral wd)) on n# s
-      | otherwise = case newSmallArray# (h# +# 1#) undefined s of
-        (# s', ms #) -> cont3 ms h# on n# s'
-      where wd = unsafeShiftR (xor k ok) n
+      | wd > 0xf = let n' = level okk in shallow h# (Stub k n' on) (unI# n') s -- we're a sibling of what we recursed into
+      | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s -- recurse deep
+      where !okk = xor k ok
+            !wd = unsafeShiftR okk n
     go k h# on@(Node ok n@(I# n#) m (SmallArray as)) s
-      | m .&. b /= 0 = cont1 k h# as (unI# (index m b)) on n# s
-      | otherwise = case newSmallArray# (h# +# 1#) undefined s of
-        (# s', ms #)
-          | b == 0    -> cont3 ms h# (Stub ok (level okk) on) n# s'
-          | otherwise -> cont3 ms h# on n# s'
-      where okk = xor k ok
-            b = shiftL 1 (fromIntegral (unsafeShiftR (xor k ok) n))
-    go k h# on@(Tip ok ov) s
-      | k == ok = case newSmallArray# h# undefined s of
-        (# s', ms #) -> (# s', ms, int2Word# 0# #) 
-      | otherwise = case newSmallArray# (h# +# 1#) undefined s of 
-        (# s', ms #) -> let n = level (xor k ok) in cont3 ms h# (Stub ok n on) (unI# n) s'
-    go k h# Nil s = case newSmallArray# h# undefined s of
+      | wd > 0xf = let n' = level okk in shallow h# (Stub k n' on) (unI# n') s
+      | otherwise = let b = unsafeShiftL 1 (fromIntegral wd) in if
+        | m .&. b /= 0 -> deep k h# as (unI# (index m b)) on n# s -- recurse deep
+        | otherwise    -> shallow h# on n# s
+      where !okk = xor k ok
+            !wd = unsafeShiftR okk n
+    go k h# on@(Tip ok _) s = shallow h# (Stub k n on) (unI# n) s -- note: k /= ok due to startup
+      where n = level (xor k ok) 
+    go k h# Nil s = case traceShow (k,"path: Nil",I# h#) (newSmallArray# h# (error "path: nil")) s of
       (# s', ms #) -> (# s', ms, int2Word# 0# #)
     go _ _ Stub{} _ = error "path: unexpected Stub"
 
