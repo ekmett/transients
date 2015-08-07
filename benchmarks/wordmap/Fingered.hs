@@ -37,6 +37,7 @@ module Fingered
   , insert
   , delete
   , lookup
+  , focus
   , fromList
   , Exts.toList
   , Key
@@ -50,12 +51,9 @@ import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
 import Data.Foldable
-import Data.Function (on)
-import Data.Functor
 import Data.Monoid
 import Data.Transient.Primitive.SmallArray
 import Data.Word
-import Debug.Trace
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
 import GHC.Exts as Exts
@@ -407,10 +405,10 @@ instance FoldableWithIndex Word64 Node where
   ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
 
 instance Eq v => Eq (WordMap v) where
-  (==) = (==) `on` Exts.toList
+  as == bs = Exts.toList as == Exts.toList bs
 
 instance Ord v => Ord (WordMap v) where
-  compare = compare `on` Exts.toList
+  compare as bs = compare (Exts.toList as) (Exts.toList bs)
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
 
@@ -426,11 +424,13 @@ instance IsList (WordMap v) where
   fromListN _ = fromList
   {-# INLINE fromListN #-}
 
+{-
 two :: WordMap Word64
 two = WordMap (Path 2 1 (fromList [Tip 1 1])) (Just 2)
 
 three :: WordMap Word64
 three = WordMap (Path 3 1 (fromList [Node 0 0 6 (fromList [Tip 1 1, Tip 2 2])])) (Just 3)
+-}
 
 -- insert 1 1 (insert 100 100 (insert 203 203 (insert 2 2 (insert 1 1 empty))))
 --
