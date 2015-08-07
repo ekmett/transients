@@ -60,6 +60,9 @@ reallyUnsafeFreeze = primToPrim . go where
     TBin a l r -> Bin a <$> unsafeInterleaveST (go l) <*> unsafeInterleaveST (go r)
     Frozen -> throwFrozenTransient
 
+query :: (Tree a -> r) -> TTree s a -> m r
+query f s = f <$> freeze s
+
 modify :: (forall s. TTree s a -> ST s ()) -> Tree a -> Tree a
 modify f s = runST $ do
   ms <- thaw s
