@@ -128,9 +128,6 @@ singleton :: Key -> v -> WordMap v
 singleton k v = WordMap (Path k 0 mempty) (Just v)
 {-# INLINE singleton #-}
 
--- we can broadcast the key, then compare in parallel with SWAR techniques
--- then we just have to search the appropriate array entries on down
-
 data Node v
   = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !(SmallArray (Node v))
   | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask {-# UNPACK #-} !(SmallArray (Node v))
@@ -250,7 +247,7 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | n0 <- level (xor ok0 k0)
   , aok <- unsafeShiftR n0 2
   , kept <- m0 .&. unsafeShiftL 0xfffe aok
-  , nkept@(I# nkept#) <- popCount kept -- 0 -- max (popCount kept - 1) 0
+  , nkept@(I# nkept#) <- popCount kept
   , !top@(I# top#) <- length ns0 - nkept
   , !root <- (case mv0 of
       Just v -> plugPath ok0 0 top (Tip ok0 v) ns0
@@ -425,18 +422,3 @@ instance IsList (WordMap v) where
 
   fromListN _ = fromList
   {-# INLINE fromListN #-}
-
-{-
-two :: WordMap Word64
-two = WordMap (Path 2 1 (fromList [Tip 1 1])) (Just 2)
-
-three :: WordMap Word64
-three = WordMap (Path 3 1 (fromList [Node 0 0 6 (fromList [Tip 1 1, Tip 2 2])])) (Just 3)
--}
-
--- insert 1 1 (insert 100 100 (insert 203 203 (insert 2 2 (insert 1 1 empty))))
---
--- focused on 1 1
--- WordMap (Path 1 3 (fromList [Tip 1 1,Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Node 0 4 4161 (fromList [Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Tip 100 100,Tip 203 203])])) (Just 1)
-
--- WordMap (Path 1 3 (fromList [Tip 1 1,Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Node 0 4 4161 (fromList [Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Tip 100 100,Tip 203 203])])) (Just 1)
