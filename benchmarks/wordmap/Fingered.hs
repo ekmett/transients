@@ -31,16 +31,16 @@
 --
 --------------------------------------------------------------------------------
 module Fingered
-{-
-  ( Node
+  ( WordMap
   , singleton
   , empty
   , insert
   , delete
   , lookup
-  -- , member
   , fromList
-  ) -} where
+  , Exts.toList
+  , Key
+  ) where
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
@@ -49,15 +49,16 @@ import Control.Monad
 import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
-import Data.Transient.Primitive.SmallArray
 import Data.Foldable
+import Data.Function (on)
 import Data.Functor
 import Data.Monoid
+import Data.Transient.Primitive.SmallArray
 import Data.Word
 import Debug.Trace
 import qualified GHC.Exts as Exts
 import Prelude hiding (lookup, length, foldr)
-import GHC.Exts
+import GHC.Exts as Exts
 import GHC.ST
 import GHC.Word
 
@@ -113,13 +114,11 @@ apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 data Path v = Path {-# UNPACK #-} !Key {-# UNPACK #-} !Word16 {-# UNPACK #-} !(SmallArray (Node v))
   deriving (Functor, Foldable, Traversable, Show)
 
--- TODO: add a lazy (Node v) for canonical access?
--- TODO: fold/traverse in the "proper" order rather than leak the current finger location
 data WordMap v = WordMap !(Path v) !(Maybe v)
-  deriving (Functor,Foldable,Traversable,Show)
+  deriving (Functor,Traversable,Show)
 
--- focus :: Key -> WordMap v -> WordMap v
--- focus k m = WordMap (path k m) (lookup k m)
+focus :: Key -> WordMap v -> WordMap v
+focus k m = WordMap (path k m) (lookup k m)
 
 empty :: WordMap v
 empty = WordMap (Path 0 0 mempty) Nothing
@@ -143,7 +142,7 @@ data Node v
 -- * Lookup
 --------------------------------------------------------------------------------
 
-lookup :: Word64 -> WordMap v -> Maybe v
+lookup :: Key -> WordMap v -> Maybe v
 lookup k0 m0 = case m0 of
   WordMap (Path ok m ns) mv
     | k0 == ok -> mv
@@ -198,11 +197,10 @@ unplug !k on@(Node ok n m as)
   where !wd = unsafeShiftR (xor k ok) n
 unplug _ on = on -- Tip
 
-canonical :: Show v => WordMap v -> Maybe (Node v)
-canonical (lint "canonical" validWordMap -> _) | False = undefined
+canonical :: WordMap v -> Maybe (Node v)
 canonical (WordMap (Path _ 0 _)  Nothing) = Nothing
-canonical (WordMap (Path k _ ns) Nothing) = Just (lint "out" (validNode 64 0) $ unplugPath k 0 (length ns) ns)
-canonical (WordMap (Path k _ ns) (Just v)) = Just (lint "out" (validNode 64 0) $ plugPath k 0 (length ns) (Tip k v) ns)
+canonical (WordMap (Path k _ ns) Nothing) = Just (unplugPath k 0 (length ns) ns)
+canonical (WordMap (Path k _ ns) (Just v)) = Just (plugPath k 0 (length ns) (Tip k v) ns)
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
@@ -241,8 +239,8 @@ unI# :: Int -> Int#
 unI# (I# i) = i
 
 -- create a 1-hole context at key k, destroying any previous contents of that position.
-path :: forall v. Show v => Key -> WordMap v -> Path v
-path k0 (lint "path" validWordMap -> WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
+path :: Key -> WordMap v -> Path v
+path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | k0 == ok0 = p0 -- keys match, easy money
   | m0 == 0 = case mv0 of
     Nothing -> Path k0 0 mempty
@@ -254,7 +252,7 @@ path k0 (lint "path" validWordMap -> WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0
   , kept <- m0 .&. unsafeShiftL 0xfffe aok
   , nkept@(I# nkept#) <- popCount kept -- 0 -- max (popCount kept - 1) 0
   , !top@(I# top#) <- length ns0 - nkept
-  , !root <- lint "root" (validNode 64 0) (case mv0 of
+  , !root <- (case mv0 of
       Just v -> plugPath ok0 0 top (Tip ok0 v) ns0
       Nothing -> unplugPath ok0 0 top ns0)
   = runST $ primitive $ \s -> case go k0 nkept# root s of
@@ -277,7 +275,6 @@ path k0 (lint "path" validWordMap -> WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0
           W16# m# -> (# s', ms, m# #)
 
     go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
-    go k h# (lint "go" (validNode (I# h#) k) -> _) _ | False = undefined
     go k h# on@(Full ok n@(I# n#) (SmallArray as)) s
       | wd > 0xf  = shallow h# on (unI# (level okk)) s -- we're a sibling of what we recursed into       -- [Displaced Full]
       | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                        -- Parent Full : ..
@@ -293,77 +290,28 @@ path k0 (lint "path" validWordMap -> WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0
       | k == ok = case newSmallArray# h# (error "hit") s of (# s', ms #) -> (# s', ms, int2Word# 0# #)
       | otherwise = shallow h# on (unI# (level (xor k ok))) s -- [Displaced Tip]
 
-data E a = E { runE :: [String] -> Either ([String],String) a }
-  deriving Functor
-
-instance Applicative E where
-  pure a = E $ \_ -> Right a
-  (<*>) = ap
-
-instance Monad E where
-  return a = E $ \_ -> Right a
-  E m >>= f = E $ \s -> case m s of
-    Left e -> Left e
-    Right a -> runE (f a) s
-  fail e = E $ \s -> Left (s,e)
-
-push :: Show x => x -> E a -> E a
-push x (E m) = E $ \s -> m (show x:s)
-  
-validNode :: Show v => Int -> Key -> Node v -> E ()
-validNode oo ok on@(Full k o as) = push on $ do
-  unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
-  unless (o < oo) $ fail $ "validNode: Full height violation " ++ show o ++ " < " ++ show oo
-  unless (0 <= o && o <= 60) $ fail "height range violation"
-  unless (rem o 4 == 0) $ fail "not an integral # of nybbles"
-  traverse_ (validNode o k) as
-validNode oo ok on@(Node k o m as) = push on $ do
-  unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
-  unless (o < oo) $ fail $ "validNode: Node height violation" ++ show o ++ " < " ++ show oo
-  unless (length as == popCount m) $ fail "validNode: mask popCount doesn't match the array size"
-  unless (0 <= o && o <= 60) $ fail "height range violation"
-  unless (rem o 4 == 0) $ fail "not an integral # of nybbles"
-  traverse_ (validNode o k) as
-validNode oo ok on@(Tip k v) = push on $ do
-  unless (shiftR (xor ok k) oo <= 0xf) $ fail $ "key range violation " ++ show (ok,k,oo)
-
-validPath :: Show v => Path v -> E ()
-validPath on@(Path k m as) = push on $ do
-  unless (length as == popCount m) $ fail "validPath: mask popCount doesn't match the array size"
-  when (m /= 0) $ do
-    validNode 64 k (unplugPath k 0 (length as) as)
-  -- TODO: validate without canonicalizing
-
-validWordMap :: Show v => WordMap v -> E ()
-validWordMap (WordMap p _) = validPath p
-
-lint :: Show a => String -> (a -> E ()) -> a -> a
-lint m f a = case runE (f a) [m] of
-  Left (s,e) -> trace ("<lint error:" ++ e ++ ">\n" ++ unlines s ++ "\nlinting: " ++ show a ++ "\n</lint error>") a
-  Right {} -> a
-
-insert :: Show v => Key -> v -> WordMap v -> WordMap v
+insert :: Key -> v -> WordMap v -> WordMap v
 insert k v wm@(WordMap (Path ok _ _) mv)
   | k == ok, Just ov <- mv, ptrEq v ov = wm
-  | otherwise = WordMap (lint "insert" validPath $ path k wm) (Just v)
+  | otherwise = WordMap (path k wm) (Just v)
 
-delete :: Show v => Key -> WordMap v -> WordMap v
+delete :: Key -> WordMap v -> WordMap v
 delete k m = WordMap (path k m) Nothing
 
 --------------------------------------------------------------------------------
 -- * Instances
 --------------------------------------------------------------------------------
 
-type instance Index (WordMap a) = Word64
+type instance Index (WordMap a) = Key
 type instance IxValue (WordMap a) = a
 
-instance Show v => At (WordMap v) where
+instance At (WordMap v) where
   at k f wm@(WordMap p@(Path ok _ _) mv)
     | k == ok = WordMap p <$> f mv
     | otherwise = let c = path k wm in WordMap c <$> f (lookup k wm)
   {-# INLINE at #-}
 
-instance Show v => Ixed (WordMap v) where
+instance Ixed (WordMap v) where
   ix k f wm = case lookup k wm of
     Nothing -> pure wm
     Just v -> let c = path k wm in f v <&> \v' -> WordMap c (Just v')
@@ -380,7 +328,6 @@ instance AsEmpty (WordMap a) where
   _Empty = prism (const empty) $ \s -> case s of
     WordMap (Path _ 0 _) Nothing -> Right ()
     t -> Left t
-
 
 updateSmallArray :: Int -> a -> SmallArray a -> SmallArray a
 updateSmallArray !k a i = runST $ do
@@ -438,7 +385,6 @@ clone16 i = do
   return o
 {-# INLINE clone16 #-}
 
-
 instance FunctorWithIndex Word64 WordMap where
   imap f (WordMap (Path k n as) mv) = WordMap (Path k n (fmap (imap f) as)) (fmap (f k) mv)
 
@@ -447,15 +393,28 @@ instance FunctorWithIndex Word64 Node where
   imap f (Tip k v) = Tip k (f k v)
   imap f (Full k n as) = Full k n (fmap (imap f) as)
 
+instance Foldable WordMap where
+  foldMap f wm = foldMap (foldMap f) (canonical wm)
+  null (WordMap (Path _ 0 _) Nothing) = True
+  null _ = False
+
 instance FoldableWithIndex Word64 WordMap where
-  ifoldMap f (WordMap (Path k _ as) mv) = foldMap (f k) mv `mappend` foldMap (ifoldMap f) as
+  ifoldMap f wm = foldMap (ifoldMap f) (canonical wm)
 
 instance FoldableWithIndex Word64 Node where
   ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
   ifoldMap f (Tip k v) = f k v
   ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
 
-instance Show v => IsList (WordMap v) where
+instance Eq v => Eq (WordMap v) where
+  (==) = (==) `on` Exts.toList
+
+instance Ord v => Ord (WordMap v) where
+  compare = compare `on` Exts.toList
+
+-- TODO: Traversable, TraversableWithIndex Word64 WordMap
+
+instance IsList (WordMap v) where
   type Item (WordMap v) = (Word64, v)
 
   toList = ifoldr (\i a r -> (i, a): r) []
