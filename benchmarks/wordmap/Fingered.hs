@@ -7,7 +7,9 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults -fobject-code #-}
@@ -43,6 +45,7 @@ module Fingered
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
 import Control.Lens hiding (index, deep)
+import Control.Monad
 import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
@@ -195,10 +198,11 @@ unplug !k on@(Node ok n m as)
   where !wd = unsafeShiftR (xor k ok) n
 unplug _ on = on -- Tip
 
-canonical :: WordMap v -> Maybe (Node v)
+canonical :: Show v => WordMap v -> Maybe (Node v)
+canonical (lint "canonical" validWordMap -> _) | False = undefined
 canonical (WordMap (Path _ 0 _)  Nothing) = Nothing
-canonical (WordMap (Path k _ ns) Nothing) = Just (unplugPath k 0 (length ns) ns)
-canonical (WordMap (Path k _ ns) (Just v)) = Just (plugPath k 0 (length ns) (Tip k v) ns)
+canonical (WordMap (Path k _ ns) Nothing) = Just (lint "out" (validNode 64 0) $ unplugPath k 0 (length ns) ns)
+canonical (WordMap (Path k _ ns) (Just v)) = Just (lint "out" (validNode 64 0) $ plugPath k 0 (length ns) (Tip k v) ns)
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
@@ -238,7 +242,7 @@ unI# (I# i) = i
 
 -- create a 1-hole context at key k, destroying any previous contents of that position.
 path :: forall v. Show v => Key -> WordMap v -> Path v
-path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
+path k0 (lint "path" validWordMap -> WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
   | k0 == ok0 = p0 -- keys match, easy money
   | m0 == 0 = case mv0 of
     Nothing -> Path k0 0 mempty
@@ -246,14 +250,14 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
       | n0 <- level (xor ok0 k0), aok <- unsafeShiftR n0 2
       -> Path k0 (unsafeShiftL 1 aok) $ runST (newSmallArray 1 (Tip ok0 v) >>= unsafeFreezeSmallArray)
   | n0 <- level (xor ok0 k0)
-  , _aok <- unsafeShiftR n0 2
-  , kept <- 0 -- m0 .&. unsafeShiftL 0xffff aok
-  , nkept@(I# nkept#) <- 0 -- max (popCount kept - 1) 0
+  , aok <- unsafeShiftR n0 2
+  , kept <- m0 .&. unsafeShiftL 0xfffe aok
+  , nkept@(I# nkept#) <- popCount kept -- 0 -- max (popCount kept - 1) 0
   , !top@(I# top#) <- length ns0 - nkept
-  , !root <- (case mv0 of
+  , !root <- lint "root" (validNode 64 0) (case mv0 of
       Just v -> plugPath ok0 0 top (Tip ok0 v) ns0
       Nothing -> unplugPath ok0 0 top ns0)
-  = traceShow ("path","root",root,"kept",kept,"nkept",nkept) $ runST $ primitive $ \s -> case go k0 nkept# root s of
+  = runST $ primitive $ \s -> case go k0 nkept# root s of
     (# s', ms, m# #) -> case copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
       s'' -> case unsafeFreezeSmallArray# ms s'' of
         (# s''', spine #) -> (# s''', Path k0 (kept .|. W16# m#) (SmallArray spine) #)
@@ -273,6 +277,7 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
           W16# m# -> (# s', ms, m# #)
 
     go :: Key -> Int# -> Node v -> State# s -> (# State# s, SmallMutableArray# s (Node v), Word# #)
+    go k h# (lint "go" (validNode (I# h#) k) -> _) _ | False = undefined
     go k h# on@(Full ok n@(I# n#) (SmallArray as)) s
       | wd > 0xf  = shallow h# on (unI# (level okk)) s -- we're a sibling of what we recursed into       -- [Displaced Full]
       | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                        -- Parent Full : ..
@@ -284,36 +289,63 @@ path k0 (WordMap p0@(Path ok0 m0 ns0@(SmallArray ns0#)) mv0)
       | otherwise = shallow h# on n# s                                                                   -- [Node]
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
-    go k h# on@(Tip ok _) s = shallow h# on (unI# (level (xor k ok))) s -- note: k /= ok due to startup  -- [Displaced Tip]
+    go k h# on@(Tip ok _) s 
+      | k == ok = case newSmallArray# h# (error "hit") s of (# s', ms #) -> (# s', ms, int2Word# 0# #)
+      | otherwise = shallow h# on (unI# (level (xor k ok))) s -- [Displaced Tip]
 
-{-
--- validNode max
-validNode :: Int -> Node v -> Either String ()
-validNode oo ok h (Full k o as) = do
+data E a = E { runE :: [String] -> Either ([String],String) a }
+  deriving Functor
+
+instance Applicative E where
+  pure a = E $ \_ -> Right a
+  (<*>) = ap
+
+instance Monad E where
+  return a = E $ \_ -> Right a
+  E m >>= f = E $ \s -> case m s of
+    Left e -> Left e
+    Right a -> runE (f a) s
+  fail e = E $ \s -> Left (s,e)
+
+push :: Show x => x -> E a -> E a
+push x (E m) = E $ \s -> m (show x:s)
+  
+validNode :: Show v => Int -> Key -> Node v -> E ()
+validNode oo ok on@(Full k o as) = push on $ do
   unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
-  unless (k < h) $ fail "height violation"
+  unless (o < oo) $ fail $ "validNode: Full height violation " ++ show o ++ " < " ++ show oo
   unless (0 <= o && o <= 60) $ fail "height range violation"
   unless (rem o 4 == 0) $ fail "not an integral # of nybbles"
-  traverse (validNode k) as
-validNode oo ok h (Node k o m as) = do
+  traverse_ (validNode o k) as
+validNode oo ok on@(Node k o m as) = push on $ do
   unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
-  unless (k < h) $ fail "height violation"
-  unless (length as == popCount m) $
+  unless (o < oo) $ fail $ "validNode: Node height violation" ++ show o ++ " < " ++ show oo
+  unless (length as == popCount m) $ fail "validNode: mask popCount doesn't match the array size"
   unless (0 <= o && o <= 60) $ fail "height range violation"
   unless (rem o 4 == 0) $ fail "not an integral # of nybbles"
-  traverse (validNode k) as
-validNode oo ok _ (Tip k v) = do
-  unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
+  traverse_ (validNode o k) as
+validNode oo ok on@(Tip k v) = push on $ do
+  unless (shiftR (xor ok k) oo <= 0xf) $ fail $ "key range violation " ++ show (ok,k,oo)
 
-validPath :: Path v -> Either String ()
-validPath (Path k m as) = do
-  unless (length as == popCount m) $ fail "mask popCount doesn't match the array size"
--}
+validPath :: Show v => Path v -> E ()
+validPath on@(Path k m as) = push on $ do
+  unless (length as == popCount m) $ fail "validPath: mask popCount doesn't match the array size"
+  when (m /= 0) $ do
+    validNode 64 k (unplugPath k 0 (length as) as)
+  -- TODO: validate without canonicalizing
+
+validWordMap :: Show v => WordMap v -> E ()
+validWordMap (WordMap p _) = validPath p
+
+lint :: Show a => String -> (a -> E ()) -> a -> a
+lint m f a = case runE (f a) [m] of
+  Left (s,e) -> trace ("<lint error:" ++ e ++ ">\n" ++ unlines s ++ "\nlinting: " ++ show a ++ "\n</lint error>") a
+  Right {} -> a
 
 insert :: Show v => Key -> v -> WordMap v -> WordMap v
 insert k v wm@(WordMap (Path ok _ _) mv)
   | k == ok, Just ov <- mv, ptrEq v ov = wm
-  | otherwise = WordMap (path k wm) (Just v)
+  | otherwise = WordMap (lint "insert" validPath $ path k wm) (Just v)
 
 delete :: Show v => Key -> WordMap v -> WordMap v
 delete k m = WordMap (path k m) Nothing
@@ -440,3 +472,10 @@ two = WordMap (Path 2 1 (fromList [Tip 1 1])) (Just 2)
 
 three :: WordMap Word64
 three = WordMap (Path 3 1 (fromList [Node 0 0 6 (fromList [Tip 1 1, Tip 2 2])])) (Just 3)
+
+-- insert 1 1 (insert 100 100 (insert 203 203 (insert 2 2 (insert 1 1 empty))))
+--
+-- focused on 1 1
+-- WordMap (Path 1 3 (fromList [Tip 1 1,Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Node 0 4 4161 (fromList [Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Tip 100 100,Tip 203 203])])) (Just 1)
+
+-- WordMap (Path 1 3 (fromList [Tip 1 1,Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Node 0 4 4161 (fromList [Node 0 0 6 (fromList [Tip 1 1,Tip 2 2]),Tip 100 100,Tip 203 203])])) (Just 1)
