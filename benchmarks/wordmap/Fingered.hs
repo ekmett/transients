@@ -181,13 +181,13 @@ fork k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. 
 
 -- O(1) remove the _entire_ branch containing a given node from this tree.
 unplug :: Key -> Node v -> Node v
-unplug k on@(Full ok n as) 
+unplug k on@(Full ok n as)
   | wd >= 0xf = on
   | d <- fromIntegral wd = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray d as)
   where !wd = unsafeShiftR (xor k ok) n
 unplug !k on@(Node ok n m as)
   | wd >= 0xf = on
-  | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0, p <- index m b = 
+  | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0, p <- index m b =
     if length as == 2
      then indexSmallArray as (1-p) -- keep the other node
      else Node ok n (m .&. complement b) (deleteSmallArray p as)
@@ -298,7 +298,7 @@ validNode oo ok h (Full k o as) = do
 validNode oo ok h (Node k o m as) = do
   unless (shiftR (xor ok k) oo == 0) $ fail "key range violation"
   unless (k < h) $ fail "height violation"
-  unless (length as == popCount m) $ 
+  unless (length as == popCount m) $
   unless (0 <= o && o <= 60) $ fail "height range violation"
   unless (rem o 4 == 0) $ fail "not an integral # of nybbles"
   traverse (validNode k) as
