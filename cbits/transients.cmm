@@ -1,0 +1,19 @@
+#import "Cmm.h"
+
+/* checkMutableArray# :: MutableArray# s a -> State# s -> (# State s, Int# #) */
+checkMutableArrayzh(P_ ma) {
+    if (StgHeader_info(arr) == stg_MUT_ARR_PTRS_FROZEN0_info || StgHeader_info(arr) == stg_MUT_ARR_PTRS_FROZEN_info) {
+      return(0);
+    } else {
+      return(1);
+    }
+}
+
+/* checkSmallMutableArray# :: SmallMutableArray# s a -> State# s -> (# State s, Int# #) */
+checkSmallMutableArrayzh(P_ ma) {
+    if ( StgHeader_info(arr) == stg_SMALL_MUT_ARR_PTRS_FROZEN0_info || StgHeader_info(arr) == stg_SMALL_MUT_ARR_PTRS_FROZEN_info) {
+      return(0);
+    } else {
+      return(1);
+    }
+}
