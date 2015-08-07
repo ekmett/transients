@@ -70,10 +70,12 @@ type Offset = Int
 
 ptrEq :: a -> a -> Bool
 ptrEq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts.==# 1#)
+-- ptrEq _ _ = False
 {-# INLINEABLE ptrEq #-}
 
 ptrNeq :: a -> a -> Bool
 ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
+-- ptrNeq _ _ = True
 {-# INLINEABLE ptrNeq #-}
 
 index :: Word16 -> Word16 -> Int

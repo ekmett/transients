@@ -59,6 +59,9 @@ main = do
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 welems) denseW
                 , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 welems) denseF
                 , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 welems) denseH
+                , bench "WordMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k (v+1) m) m0 welems) denseW
+                , bench "FlatMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k (v+1) m) m0 welems) denseF
+                , bench "HashMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k (v+1) m) m0 welems) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap" $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 sElemsSearch) sparseM
