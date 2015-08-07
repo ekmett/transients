@@ -43,13 +43,13 @@ main = do
             [ bgroup "present"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 keys) denseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wkeys) denseW
-                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wkeys) denseF
+                , bench "Fingered" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wkeys) denseF
                 , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wkeys) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 sKeysSearch) sparseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wsKeysSearch) sparseW
-                , bench "FlatMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wsKeysSearch) sparseF
+                , bench "Fingered" $ whnf (\m -> foldl' (\n k -> fromMaybe n (F.lookup k m)) 0 wsKeysSearch) sparseF
                 , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wsKeysSearch) sparseH
                 ]
             ]
@@ -57,16 +57,16 @@ main = do
             [ bgroup "present"
                 [ bench "IntMap"  $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 elems) denseM
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 welems) denseW
-                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 welems) denseF
+                , bench "Fingered" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 welems) denseF
                 , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 welems) denseH
                 , bench "WordMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k (v+1) m) m0 welems) denseW
-                , bench "FlatMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k (v+1) m) m0 welems) denseF
+                , bench "Fingered+1" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k (v+1) m) m0 welems) denseF
                 , bench "HashMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k (v+1) m) m0 welems) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap" $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 sElemsSearch) sparseM
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 wsElemsSearch) sparseW
-                , bench "FlatMap" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 wsElemsSearch) sparseF
+                , bench "Fingered" $ whnf (\m0 -> foldl' (\m (k, v) -> F.insert k v m) m0 wsElemsSearch) sparseF
                 , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 wsElemsSearch) sparseH
                 ]
             ]
