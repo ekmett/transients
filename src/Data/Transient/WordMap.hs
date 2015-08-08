@@ -112,61 +112,55 @@ apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 --------------------------------------------------------------------------------
 
 data Node s v
-  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallArray (Node () v))
-  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (Node () v))
+  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (Node s v))
+  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s v))
   | Tip  {-# UNPACK #-} !Key v
-  | TFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (Node s v))
-  | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s v)
   deriving (Functor,Foldable,Traversable,Show)
-  -- TODO: manual Foldable
 
 type role TNode nominal representational
 
-unsafeFreezeNode :: PrimMonad m => Node (PrimState m) v -> m (Node () v)
-unsafeFreezeNode (TFull k o mas) = Full k o <$> unsafeFreezeSmallArray mas
-unsafeFreezeNode (TNode k o m mas) = Node k o <$> unsafeFreezeSmallArray mas
-unsafeFreezeNode on = return (unsafeCoerce on)
 
-thawNode :: Node () v -> Node s v
-thawNode = unasfeCoerce
+
 
 --------------------------------------------------------------------------------
 -- * WordMaps
 --------------------------------------------------------------------------------
 
-data Path v = Path {-# UNPACK #-} !Key {-# UNPACK #-} !Word16 {-# UNPACK #-} !(SmallArray (Node () v))
-  deriving (Functor, Foldable, Traversable, Show)
+data WordMap s v = WordMap {-# UNPACK #-} !Key {-# UNPACK #-} !Word16 {-# UNPACK #-} !(SmallMutableArray s (Node s v)) !(Maybe v)
 
-data WordMap v = WordMap !(Path v) !(Maybe v)
-  deriving (Functor,Traversable,Show)
+emptyFrozenSmallMutableArray :: SmallMutableArray s a
+emptyFrozenSmallMutableArray m = runST $ do
+  mas <- newSmallArray 0 undefined
+  unsafeFreeze mas
+  return mas -- give back the array
 
-empty :: WordMap v
-empty = WordMap (Path 0 0 mempty) Nothing
+empty :: WordMap s v
+empty = WordMap (Path 0 0 emptyFrozenSmallMutableArray) Nothing
 
 -- | Build a singleton Node
-singleton :: Key -> v -> WordMap v
-singleton k v = WordMap (Path k 0 mempty) (Just v)
+singleton :: Key -> v -> WordMap s v
+singleton k v = WordMap (Path k 0 emptyFrozenSmallMutableArray) (Just v)
 {-# INLINE singleton #-}
+
+thawSmallMutableArray :: PrimMonad m => SmallMutableArray () a -> m (SmallMutableArray s a)
 
 --------------------------------------------------------------------------------
 -- * Transient WordMaps
 --------------------------------------------------------------------------------
 
-data TPath s v = TPath {-# UNPACK #-} !Key {-# UNPACK #-} !Word16 {-# UNPACK #-} !(SmallMutableArray s (TNode s v))
-
-data TWordMap s v = TWordMap !(MutVar s (TPath s v)) !(MutVar s (Maybe v))
-
-thaw :: PrimMonad m => WordMap v -> m (TWordMap (PrimState m) v)
+thaw :: PrimMonad m => WordMap () v -> m (WordMap (PrimState m) v)
 thaw (WordMap (Path k m ns) mv) = do
-  mns <- thawSmallArray ns
-  TWordMap <$> newMutVar (TPath k m mns) <*> newMutVar mv
+  ns' <- thawSmallArray ns
+  return $ WordMap (Path k m (coerce ns')) mv
 
-unsafeFreeze :: PrimMonad m => TWordMap (PrimState m) v -> m (WordMap v)
+unsafeFreeze :: PrimMonad m => WordMap (PrimState m) v -> m (WordMap () v)
 unsafeFreeze (TWordMap mp mmv) = do
-  TPath k m mns <- readMutVar mp 
+  p@(Path k m mns) <- readMutVar mp 
+  _ <- unsafeFreezeSmallArray mns -- the recursive parts of this structure remain 'mutable'
   mv <- readMutVar mmv
-  ns <- unsafeFreezeSmallArray mns
-  return $ WordMap (Path k m ns) mv
+  return $ WordMap (unsafeCoerce p) mv
+
+-- TODO: unsafeDeepFreeze would remove pressure from the generational GC by finishing the job rather than leaving it lazy
 
 --------------------------------------------------------------------------------
 -- * Lookup
@@ -193,9 +187,11 @@ lookup k0 m0 = case m0 of
     go k (Tip ok ov)
       | k == ok   = Just ov
       | otherwise = Nothing
+    go _ TFull{} = error "lookup: TFull"
+    go _ TNode{} = error "lookup: TNode"
 {-# INLINEABLE lookup #-}
 
-lookupM :: Key -> TWordMap (PrimState m) v -> m (Maybe v)
+lookupM :: PrimMonad m => Key -> TWordMap (PrimState m) v -> m (Maybe v)
 lookupM k0 (TWordMap mp mmv) = do
   TPath ok m mns <- readMutVar mp
   if | k0 == ok -> readMutVar mmv
@@ -225,23 +221,8 @@ lookupM k0 (TWordMap mp mmv) = do
             b = unsafeShiftL 1 (fromIntegral z)
     go k (Tip ok ov)
       | k == ok   = return (Just ov)
-      | otherwise = return (Nothing)
-{-# INLINEABLE lookup #-}
-
-    go2 !k (Full ok o a) = return !k 
-      | z > 0xf   = Nothing
-      | otherwise = go k (indexSmallArray a (fromIntegral z))
-      where z = unsafeShiftR (xor k ok) o
-    go2 k (Node ok o m a)
-      | z > 0xf      = Nothing
-      | m .&. b == 0 = Nothing
-      | otherwise = go k (indexSmallArray a (index m b))
-      where z = unsafeShiftR (xor k ok) o
-            b = unsafeShiftL 1 (fromIntegral z)
-    go k (Tip ok ov)
-      | k == ok   = Just ov
-      | otherwise = Nothing
-{-# INLINEABLE lookup #-}
+      | otherwise = return Nothing
+{-# INLINEABLE lookupM #-}
 
 --------------------------------------------------------------------------------
 -- * Construction
@@ -252,8 +233,20 @@ node k o 0xffff a = Full k o a
 node k o m a      = Node k o m a
 {-# INLINE node #-}
 
+tnode :: Key -> Offset -> Mask -> SmallMutableArray s (Node v) -> Node s v
+tnode k o 0xffff a = TFull k o a
+tnode k o m a      = TNode k o m a
+{-# INLINE tnode #-}
+
 fork :: Key -> Node v -> Key -> Node v -> Node v
 fork k n ok on = Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) $ runST $ do
+    arr <- newSmallArray 2 n
+    writeSmallArray arr (fromEnum (k < ok)) on
+    unsafeFreezeSmallArray arr
+  where o = level (xor k ok)
+
+tfork :: PrimMonad m => Key -> Node v -> Key -> Node (PrimState m) v -> m (Node (PrimState m) v)
+tfork k n ok on = TNode (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) <$> do
     arr <- newSmallArray 2 n
     writeSmallArray arr (fromEnum (k < ok)) on
     unsafeFreezeSmallArray arr
