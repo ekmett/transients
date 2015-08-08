@@ -244,10 +244,6 @@ sizeOfSmallArray :: SmallArray a -> Int
 sizeOfSmallArray (SmallArray a) = I# (sizeofSmallArray# a)
 {-# INLINE sizeOfSmallArray #-}
 
-sizeOfSmallMutableArray :: SmallMutableArray s a -> Int
-sizeOfSmallMutableArray (SmallMutableArray a) = I# (sizeofSmallMutableArray# a)
-{-# INLINE sizeOfSmallMutableArray #-}
-
 instance Traversable SmallArray where
   traverse f a = fromListN (length a) <$> traverse f (Foldable.toList a)
 
@@ -333,11 +329,6 @@ instance NFData a => NFData (SmallArray a) where
       | otherwise = rnf (indexSmallArray a i) `seq` go a n (i+1)
   {-# INLINE rnf #-}
 
--- | Perform an unsafe, machine-level atomic compare and swap on an element within an array.
-casSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
-casSmallArray (SmallMutableArray m) (I# i) a b = primitive $ \s -> case casSmallArray# m i a b s of
-  (# s', j, c #) -> (# s', (I# j, c) #)
-
 instance Data a => Data (SmallArray a) where
   gfoldl f z m   = z fromList `f` Foldable.toList m
   toConstr _     = fromListConstr
@@ -406,3 +397,20 @@ instance Snoc (SmallArray a) (SmallArray b) a b where
         , indexSmallArray m 0
         )
       | otherwise = Left empty
+
+--------------------------------------------------------------------------------
+-- * "Evil" Small Mutable Array instances
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- * Small Mutable Array combinators
+--------------------------------------------------------------------------------
+
+sizeOfSmallMutableArray :: SmallMutableArray s a -> Int
+sizeOfSmallMutableArray (SmallMutableArray a) = I# (sizeofSmallMutableArray# a)
+{-# INLINE sizeOfSmallMutableArray #-}
+
+-- | Perform an unsafe, machine-level atomic compare and swap on an element within an array.
+casSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> a -> a -> m (Int, a)
+casSmallArray (SmallMutableArray m) (I# i) a b = primitive $ \s -> case casSmallArray# m i a b s of
+  (# s', j, c #) -> (# s', (I# j, c) #)
