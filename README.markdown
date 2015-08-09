@@ -1,7 +1,7 @@
 transients
 ==========
 
-[![Build Status](https://secure.travis-ci.org/ekmett/transients.png?branch=master)](http://travis-ci.org/ekmett/transients)
+[![Hackage](https://img.shields.io/hackage/v/transients.svg)](https://hackage.haskell.org/package/transients) [![Build Status](https://secure.travis-ci.org/ekmett/transients.png?branch=master)](http://travis-ci.org/ekmett/transients
 
 This package is an exploration of Clojure-style transients in Haskell.
 
