@@ -1,15 +1,18 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE Unsafe #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE UnboxedTuples #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE UnliftedFFITypes #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE Unsafe #-}
+{-# LANGUAGE GHCForeignImportPrim #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 --------------------------------------------------------------------------------
 -- |
 -- Copyright   : (c) Edward Kmett 2015
@@ -38,6 +41,12 @@ module Data.Transient.Primitive.SmallArray
   , casSmallArray
   , sizeOfSmallArray
   , sizeOfSmallMutableArray
+  , unsafeCheckSmallMutableArray
+  , unsafeCloneSmallMutableArray
+  , unsafeIndexSmallMutableArray
+  , unsafeIndexSmallMutableArrayM
+  , indexSmallMutableArray
+  , indexSmallMutableArrayM
   ) where
 
 import Control.Applicative
@@ -49,13 +58,55 @@ import Control.Monad.Zip
 import Data.Data
 import Data.Foldable as Foldable
 import GHC.Exts
+import GHC.Prim
 import GHC.ST
-
--- | Boxed arrays
-data SmallArray a = SmallArray (SmallArray# a)
+import Unsafe.Coerce
 
 -- | Mutable boxed arrays associated with a primitive state token.
 data SmallMutableArray s a = SmallMutableArray (SmallMutableArray# s a)
+
+data SmallArray a = SmallArray (SmallArray# a)
+
+-- # return's 1# when the mutable array is actually mutable and not frozen
+foreign import prim "checkSmallMutableArrayzh" unsafeCheckSmallMutableArray# :: SmallMutableArray# s a -> State# s -> (# State# s, Int# #)
+
+-- | This returns 'True' if the 'SmallMutableArray' is unfrozen and can still be mutated.
+unsafeCheckSmallMutableArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> m Bool
+unsafeCheckSmallMutableArray (SmallMutableArray m) = primitive $ \s -> case unsafeCheckSmallMutableArray# m s of
+  (# s', i #) -> (# s', isTrue# i #)
+
+unsafeCopySmallMutableArray :: PrimMonad m => SmallMutableArray s a -> Int -> SmallMutableArray (PrimState m) a -> Int -> Int -> m ()
+unsafeCopySmallMutableArray (SmallMutableArray x) (I# i) (SmallMutableArray y) (I# j) (I# k) = primitive_ $ \s ->
+  unsafeCoerce copySmallMutableArray# x i y j k s
+
+-- argument deliberately does not agree with our current region
+unsafeCloneSmallMutableArray :: PrimMonad m => SmallMutableArray s a -> Int -> Int -> m (SmallMutableArray (PrimState m) a)
+unsafeCloneSmallMutableArray (SmallMutableArray m) (I# i) (I# j) = primitive $ \s -> case unsafeCoerce cloneSmallMutableArray# m i j s of
+  (# s', ma #) -> (# s', SmallMutableArray ma #)
+
+unsafeCloneSmallArray :: SmallMutableArray () a -> Int -> Int -> SmallMutableArray () a
+unsafeCloneSmallArray (SmallMutableArray m) (I# i) (I# j) = SmallMutableArray (unsafeCoerce cloneSmallArray# m i j)
+
+unsafeIndexSmallMutableArray :: SmallMutableArray s a -> Int -> a
+unsafeIndexSmallMutableArray = unsafeCoerce indexSmallArray
+{-# INLINE unsafeIndexSmallMutableArray #-}
+
+-- argument deliberately does not agree with our current region
+unsafeIndexSmallMutableArrayM :: forall m s a. Monad m => SmallMutableArray s a -> Int -> m a
+unsafeIndexSmallMutableArrayM = unsafeCoerce (indexSmallArrayM :: SmallArray a -> Int -> m a)
+{-# INLINE unsafeIndexSmallMutableArrayM #-}
+
+indexSmallMutableArray :: SmallMutableArray () a -> Int -> a
+indexSmallMutableArray = unsafeIndexSmallMutableArray
+{-# INLINE indexSmallMutableArray #-}
+
+indexSmallMutableArrayM :: Monad m => SmallMutableArray () a -> Int -> m a
+indexSmallMutableArrayM = unsafeIndexSmallMutableArrayM
+{-# INLINE indexSmallMutableArrayM #-}
+
+-- TODO: lift the coerce
+unsafeFreezeSmallMutableArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> m (SmallMutableArray () a)
+unsafeFreezeSmallMutableArray m = unsafeCoerce <$> unsafeFreezeSmallArray m
 
 instance Eq (SmallMutableArray s a) where
   (==) = sameSmallMutableArray
@@ -67,25 +118,25 @@ type role SmallMutableArray nominal representational
 -- | Create a new mutable array of the specified size and initialise all
 -- elements with the given value.
 newSmallArray :: PrimMonad m => Int -> a -> m (SmallMutableArray (PrimState m) a)
-{-# INLINE newSmallArray #-}
 newSmallArray (I# n#) x = primitive
    (\s# -> case newSmallArray# n# x s# of
              (# s'#, arr# #) -> (# s'#, SmallMutableArray arr# #))
+{-# INLINE newSmallArray #-}
 
 -- | Read a value from the array at the given index.
 readSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> m a
-{-# INLINE readSmallArray #-}
 readSmallArray (SmallMutableArray arr#) (I# i#) = primitive (readSmallArray# arr# i#)
+{-# INLINE readSmallArray #-}
 
 -- | Write a value to the array at the given index.
 writeSmallArray :: PrimMonad m => SmallMutableArray (PrimState m) a -> Int -> a -> m ()
-{-# INLINE writeSmallArray #-}
 writeSmallArray (SmallMutableArray arr#) (I# i#) x = primitive_ (writeSmallArray# arr# i# x)
+{-# INLINE writeSmallArray #-}
 
 -- | Read a value from the immutable array at the given index.
 indexSmallArray :: SmallArray a -> Int -> a
-{-# INLINE indexSmallArray #-}
 indexSmallArray (SmallArray arr#) (I# i#) = case indexSmallArray# arr# i# of (# x #) -> x
+{-# INLINE indexSmallArray #-}
 
 -- | Monadically read a value from the immutable array at the given index.
 -- This allows us to be strict in the array while remaining lazy in the read
@@ -199,6 +250,12 @@ instance IsList (SmallArray a) where
     unsafeFreezeSmallArray arr
   fromList xs = fromListN (Prelude.length xs) xs
 
+instance (s ~ ()) => IsList (SmallMutableArray s a) where 
+  type Item (SmallMutableArray s a) = a
+  toList = Foldable.toList
+  fromListN n (xs0 :: [a]) = unsafeCoerce (fromListN n xs0 :: SmallArray a)
+  fromList xs = fromListN (Prelude.length xs) xs
+
 instance Functor SmallArray where
   fmap f !i = runST $ do
     let n = length i
@@ -211,6 +268,19 @@ instance Functor SmallArray where
             go (k+1)
     go 0
     unsafeFreezeSmallArray o
+
+instance s ~ () => Functor (SmallMutableArray s) where
+  fmap f !i = runST $ do
+    let n = length i
+    o <- newSmallArray n undefined
+    let go !k
+          | k == n = return ()
+          | otherwise = do
+            a <- indexSmallMutableArrayM i k
+            writeSmallArray o k (f a)
+            go (k+1)
+    go 0
+    unsafeCoerce <$> unsafeFreezeSmallArray o
 
 instance Foldable SmallArray where
   foldr f z arr = go 0 where
@@ -240,11 +310,42 @@ instance Foldable SmallArray where
   length = sizeOfSmallArray
   {-# INLINE length #-}
 
+instance (s ~ ()) => Foldable (SmallMutableArray s) where
+  foldr f z arr = go 0 where
+    n = length arr
+    go !k
+      | k == n    = z
+      | otherwise = f (indexSmallMutableArray arr k) (go (k+1))
+
+  foldl f z arr = go (length arr - 1) where
+    go !k
+      | k < 0 = z
+      | otherwise = f (go (k-1)) (indexSmallMutableArray arr k)
+
+  foldr' f z arr = go 0 where
+    n = length arr
+    go !k
+      | k == n    = z
+      | r <- indexSmallMutableArray arr k = r `seq` f r (go (k+1))
+
+  foldl' f z arr = go (length arr - 1) where
+    go !k
+      | k < 0 = z
+      | r <- indexSmallMutableArray arr k = r `seq` f (go (k-1)) r
+
+  null a = length a == 0
+
+  length = sizeOfSmallMutableArray
+  {-# INLINE length #-}
+
 sizeOfSmallArray :: SmallArray a -> Int
 sizeOfSmallArray (SmallArray a) = I# (sizeofSmallArray# a)
 {-# INLINE sizeOfSmallArray #-}
 
 instance Traversable SmallArray where
+  traverse f a = fromListN (length a) <$> traverse f (Foldable.toList a)
+
+instance (s ~ ()) => Traversable (SmallMutableArray s) where
   traverse f a = fromListN (length a) <$> traverse f (Foldable.toList a)
 
 instance Applicative SmallArray where
@@ -269,7 +370,37 @@ instance Applicative SmallArray where
             inner o i (j + 1) f (p + 1)
         | otherwise = outer o (i + 1) p
 
+instance (s ~ ()) => Applicative (SmallMutableArray s) where
+  pure a = runST $ do
+    m <- newSmallArray 1 a
+    unsafeCoerce <$> unsafeFreezeSmallArray m
+  (m :: SmallMutableArray () (a -> b)) <*> (n :: SmallMutableArray () a) = runST $ do
+      o <- newSmallArray (lm * ln) undefined
+      outer o 0 0
+    where
+      lm = length m
+      ln = length n
+      outer :: SmallMutableArray t b -> Int -> Int -> ST t (SmallMutableArray () b)
+      outer o !i p
+        | i < lm = do
+            f <- indexSmallMutableArrayM m i
+            inner o i 0 f p
+        | otherwise = unsafeCoerce <$> unsafeFreezeSmallArray o
+      inner :: SmallMutableArray t b -> Int -> Int -> (a -> b) -> Int -> ST t (SmallMutableArray () b)
+      inner o i !j f !p
+        | j < ln = do
+            x <- indexSmallMutableArrayM n j
+            writeSmallArray o p (f x)
+            inner o i (j + 1) f (p + 1)
+        | otherwise = outer o (i + 1) p
+
 instance Monad SmallArray where
+  return = pure
+  (>>) = (*>)
+  fail _ = empty
+  m >>= f = foldMap f m
+
+instance (s ~ ()) => Monad (SmallMutableArray s) where
   return = pure
   (>>) = (*>)
   fail _ = empty
@@ -291,7 +422,27 @@ instance MonadZip SmallArray where
         | otherwise = unsafeFreezeSmallArray o
   munzip m = (fmap fst m, fmap snd m)
 
+instance (s ~ ()) => MonadZip (SmallMutableArray s) where
+  mzipWith (f :: a -> b -> c) m n = runST $ do
+    o <- newSmallArray l undefined
+    go o 0
+    where
+      l = min (length m) (length n)
+      go :: SmallMutableArray t c -> Int -> ST t (SmallMutableArray () c)
+      go o !i
+        | i < l = do
+          a <- indexSmallMutableArrayM m i
+          b <- indexSmallMutableArrayM n i
+          writeSmallArray o i (f a b)
+          go o (i + 1)
+        | otherwise = unsafeCoerce <$> unsafeFreezeSmallArray o
+  munzip m = (fmap fst m, fmap snd m)
+
 instance MonadPlus SmallArray where
+  mzero = empty
+  mplus = (<|>)
+
+instance (s ~ ()) => MonadPlus (SmallMutableArray s) where
   mzero = empty
   mplus = (<|>)
 
@@ -305,7 +456,23 @@ instance Alternative SmallArray where
            s' -> copySmallArray# pn 0# po ilm iln s'
          unsafeFreezeSmallArray o
 
+instance (s ~ ()) => Alternative (SmallMutableArray s) where
+  empty = runST $ do
+    a <- newSmallArray 0 undefined
+    unsafeCoerce <$> unsafeFreezeSmallArray a
+  m@(SmallMutableArray pm) <|> n@(SmallMutableArray pn) = runST $ case length m of
+     lm@(I# ilm) -> case length n of
+       ln@(I# iln) -> do
+         o@(SmallMutableArray po) <- newSmallArray (lm + ln) undefined
+         primitive_ $ \s -> case copySmallMutableArray# (unsafeCoerce# pm) 0# po 0# ilm s of
+           s' -> copySmallMutableArray# (unsafeCoerce# pn) 0# po ilm iln s'
+         unsafeCoerce <$> unsafeFreezeSmallArray o
+
 instance Monoid (SmallArray a) where
+  mempty = empty
+  mappend = (<|>)
+
+instance (s ~ ()) => Monoid (SmallMutableArray s a) where
   mempty = empty
   mappend = (<|>)
 
@@ -313,7 +480,14 @@ instance Show a => Show (SmallArray a) where
   showsPrec d as = showParen (d > 10) $
     showString "fromList " . showsPrec 11 (Foldable.toList as)
 
+instance (Show a, s ~ ()) => Show (SmallMutableArray s a) where
+  showsPrec d as = showParen (d > 10) $
+    showString "fromList " . showsPrec 11 (Foldable.toList as)
+
 instance Read a => Read (SmallArray a) where
+  readsPrec d = readParen (d > 10) $ \s -> [(fromList m, u) | ("fromList", t) <- lex s, (m,u) <- readsPrec 11 t]
+
+instance (Read a, s ~ ()) => Read (SmallMutableArray s a) where
   readsPrec d = readParen (d > 10) $ \s -> [(fromList m, u) | ("fromList", t) <- lex s, (m,u) <- readsPrec 11 t]
 
 instance Ord a => Ord (SmallArray a) where
@@ -327,6 +501,13 @@ instance NFData a => NFData (SmallArray a) where
     go !a !n !i
       | i >= n = ()
       | otherwise = rnf (indexSmallArray a i) `seq` go a n (i+1)
+  {-# INLINE rnf #-}
+
+instance (NFData a, s ~ ()) => NFData (SmallMutableArray s a) where
+  rnf a0 = go a0 (length a0) 0 where
+    go !a !n !i
+      | i >= n = ()
+      | otherwise = rnf (indexSmallMutableArray a i) `seq` go a n (i+1)
   {-# INLINE rnf #-}
 
 instance Data a => Data (SmallArray a) where
@@ -343,6 +524,21 @@ fromListConstr = mkConstr smallArrayDataType "fromList" [] Prefix
 
 smallArrayDataType :: DataType
 smallArrayDataType = mkDataType "Data.Transient.Primitive.SmallArray.SmallArray" [fromListConstr]
+
+instance (Data a, s ~ ()) => Data (SmallMutableArray s a) where
+  gfoldl f z m   = z fromList `f` Foldable.toList m
+  toConstr _     = fromListConstr2
+  gunfold k z c  = case constrIndex c of
+    1 -> k (z fromList)
+    _ -> error "gunfold"
+  dataTypeOf _   = smallMutableArrayDataType
+  dataCast1 f    = gcast1 f
+
+fromListConstr2 :: Constr
+fromListConstr2 = mkConstr smallMutableArrayDataType "fromList" [] Prefix
+
+smallMutableArrayDataType :: DataType
+smallMutableArrayDataType = mkDataType "Data.Transient.Primitive.SmallArray.SmallMutableArray" [fromListConstr2]
 
 -- * Lens support
 
@@ -361,7 +557,25 @@ instance Ixed (SmallArray a) where
         writeSmallArray o i a
         unsafeFreezeSmallArray o
 
+type instance Index (SmallMutableArray s a) = Int
+type instance IxValue (SmallMutableArray s a) = a
+
+instance (s ~ ()) => Ixed (SmallMutableArray s a) where
+  ix i f m
+    | 0 <= i && i < n = go <$> f (indexSmallMutableArray m i)
+    | otherwise = pure m
+    where
+      n = sizeOfSmallMutableArray m
+      go a = runST $ do
+        o <- newSmallArray n undefined
+        unsafeCopySmallMutableArray m 0 o 0 n
+        writeSmallArray o i a
+        unsafeCoerce <$> unsafeFreezeSmallArray o
+
 instance AsEmpty (SmallArray a) where
+  _Empty = nearly empty null
+
+instance (s ~ ()) => AsEmpty (SmallMutableArray s a) where
   _Empty = nearly empty null
 
 instance Cons (SmallArray a) (SmallArray b) a b where
@@ -374,10 +588,21 @@ instance Cons (SmallArray a) (SmallArray b) a b where
       | n <- sizeOfSmallArray m
       , n > 0 = Right
         ( indexSmallArray m 0
-        , runST $ do
-          o <- newSmallArray (n - 1) undefined
-          copySmallArray o 0 m 1 (n - 1)
-          unsafeFreezeSmallArray o
+        , cloneSmallArray m 1 (n-1)
+        )
+      | otherwise = Left empty
+
+instance (s ~ ()) => Cons (SmallMutableArray s a) (SmallMutableArray s b) a b where
+  _Cons = prism hither yon where
+    hither (a,m) | n <- sizeOfSmallMutableArray m = runST $ do
+      o <- newSmallArray (n + 1) a
+      unsafeCopySmallMutableArray m 1 o 0 n
+      unsafeCoerce <$> unsafeFreezeSmallArray o
+    yon m
+      | n <- sizeOfSmallMutableArray m
+      , n > 0 = Right
+        ( indexSmallMutableArray m 0
+        , unsafeCloneSmallArray m 1 (n - 1)
         )
       | otherwise = Left empty
 
@@ -390,17 +615,24 @@ instance Snoc (SmallArray a) (SmallArray b) a b where
     yon m
       | n <- sizeOfSmallArray m
       , n > 0 = Right
-        ( runST $ do
-          o <- newSmallArray (n - 1) undefined
-          copySmallArray o 0 m 0 (n - 1)
-          unsafeFreezeSmallArray o
+        ( cloneSmallArray m 0 (n - 1)
         , indexSmallArray m 0
         )
       | otherwise = Left empty
 
---------------------------------------------------------------------------------
--- * "Evil" Small Mutable Array instances
---------------------------------------------------------------------------------
+instance (s ~ ()) => Snoc (SmallMutableArray s a) (SmallMutableArray s b) a b where
+  _Snoc = prism hither yon where
+    hither (m,a) | n <- sizeOfSmallMutableArray m = runST $ do
+      o <- newSmallArray (n + 1) a
+      unsafeCopySmallMutableArray m 0 o 0 n
+      unsafeCoerce <$> unsafeFreezeSmallArray o
+    yon m
+      | n <- sizeOfSmallMutableArray m
+      , n > 0 = Right
+        ( unsafeCloneSmallArray m 0 (n-1)
+        , indexSmallMutableArray m 0
+        )
+      | otherwise = Left empty
 
 --------------------------------------------------------------------------------
 -- * Small Mutable Array combinators
