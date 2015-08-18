@@ -21,7 +21,6 @@ import Control.Monad.Primitive
 import Data.Primitive.Array
 import Data.Transient.Primitive.SmallArray
 import GHC.Exts
-import GHC.Prim
 import Unsafe.Coerce
 
 foreign import prim "checkMutableArrayzh"      unsafeCheckMutableArray#      :: MutableArray# s a -> State# s -> (# State# s, Int# #) 
