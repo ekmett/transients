@@ -208,26 +208,6 @@ singletonT k v = TWordMap k 0 (Just v) emptySmallMutableArray
 singletonM :: PrimMonad m => Word64 -> a -> m (MWordMap (PrimState m) a)
 singletonM k v = thaw (singleton k v)
 
-lookup :: Word64 -> WordMap a -> Maybe a
-lookup k m = runST (lookupT k (transient m))
-{-# INLINEABLE lookup #-}
-
-lookupM :: PrimMonad m => Word64 -> MWordMap (PrimState m) a -> m (Maybe a)
-lookupM k0 (MWordMap m) = do
-  x <- readMutVar m
-  lookupT k0 x
-{-# INLINE lookupM #-}
-
-lookupT :: PrimMonad m => Word64 -> TWordMap (PrimState m) a -> m (Maybe a)
-lookupT k0 (TWordMap ok m mv mns)
-  | k0 == ok = return mv
-  | b <- apogee k0 ok = if
-    | m .&. b == 0 -> return Nothing
-    | otherwise    -> do
-      x <- readSmallArray mns (index m b)
-      primToPrim (lookupTNode k0 x)
-{-# INLINEABLE lookupT #-}
-
 lookupTNode :: Word64 -> TNode s a -> ST s (Maybe a)
 lookupTNode !k (TFull ok o a)
   | z > 0xf   = return Nothing
@@ -248,6 +228,52 @@ lookupTNode k (TNode ok o m a)
 lookupTNode k (TTip ok ov)
   | k == ok   = return (Just ov)
   | otherwise = return (Nothing)
+
+lookupT :: PrimMonad m => Word64 -> TWordMap (PrimState m) a -> m (Maybe a)
+lookupT k0 (TWordMap ok m mv mns)
+  | k0 == ok = return mv
+  | b <- apogee k0 ok = if
+    | m .&. b == 0 -> return Nothing
+    | otherwise    -> do
+      x <- readSmallArray mns (index m b)
+      primToPrim (lookupTNode k0 x)
+{-# INLINE lookupT #-}
+
+lookupM :: PrimMonad m => Word64 -> MWordMap (PrimState m) a -> m (Maybe a)
+lookupM k0 (MWordMap m) = do
+  x <- readMutVar m
+  lookupT k0 x
+{-# INLINE lookupM #-}
+
+-- implementation of lookup using the transient operations
+lookup0 :: Word64 -> WordMap a -> Maybe a
+lookup0 k m = runST (lookupT k (transient m))
+{-# INLINE lookup0 #-}
+
+lookupNode :: Word64 -> Node a -> Maybe a
+lookupNode !k (Full ok o a)
+  | z > 0xf   = Nothing
+  | otherwise = lookupNode k (indexSmallArray a (fromIntegral z))
+  where
+    z = unsafeShiftR (xor k ok) o
+lookupNode k (Node ok o m a)
+  | z > 0xf      = Nothing
+  | m .&. b == 0 = Nothing
+  | otherwise = lookupNode k (indexSmallArray a (index m b))
+  where
+    z = unsafeShiftR (xor k ok) o
+    b = unsafeShiftL 1 (fromIntegral z)
+lookupNode k (Tip ok ov)
+  | k == ok   = Just ov
+  | otherwise = Nothing
+
+lookup :: Word64 -> WordMap a -> Maybe a
+lookup k0 (WordMap ok m mv mns)
+  | k0 == ok = mv
+  | b <- apogee k0 ok = if
+    | m .&. b == 0 -> Nothing
+    | otherwise    -> lookupNode k0 (indexSmallArray mns (index m b))
+{-# INLINE lookup #-}
 
 -- | Modify an immutable structure with mutable operations.
 --
