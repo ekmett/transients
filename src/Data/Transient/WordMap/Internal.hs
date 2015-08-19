@@ -130,6 +130,7 @@ frozen = unsafeCoerce
 -- | O(1) worst-case conversion from an immutable structure to a mutable one
 thaw :: WordMap a -> TWordMap s a
 thaw = unsafeCoerce
+{-# INLINE thaw #-}
 
 reallyUnsafeFreezeTNode :: TNode s a -> Node a
 reallyUnsafeFreezeTNode = unsafeCoerce
@@ -167,6 +168,7 @@ freeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
         TFull _ _ as   -> do go as; walk ns (i - 1)
         _              -> return ()
       | otherwise = return ()
+{-# NOINLINE freeze #-}
 
 empty :: WordMap a
 empty = frozen emptyM
@@ -393,8 +395,8 @@ trim wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>
       | otherwise = return wm
 
 -- do we want to make this eagerly scrub the parent pointers?
-focusHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-focusHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
+focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
   | m0 == 0 = case mv0 of
     Nothing -> return (TWordMap k0 0 Nothing emptySmallMutableArray)
@@ -448,45 +450,51 @@ modify f wm = runST $ do
   freeze mwm
 {-# INLINE modify #-}
 
+{-# RULES "freeze/thaw" forall m. freeze (unsafeCoerce m) = return m #-}
+
 -- | This does _not_ destroy the transient, although, it does mean subsequent actions need to copy-on-write from scratch
 query :: PrimMonad m => (WordMap a -> r) -> TWordMap (PrimState m) a -> m r
 query f t = f <$> freeze t
+{-# INLINE query #-}
 
 focusM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-focusM = focusHint warm
+focusM = focusWithHint warm
 {-# INLINE focusM #-}
 
 focus :: Key -> WordMap a -> WordMap a
-focus k = modify (focusHint cold k)
+focus k wm = modify (focusWithHint cold k) wm
+{-# INLINE focus #-}
 
-insertHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-insertHint hint k v wm@(TWordMap ok _ mv _)
+insertWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+insertWithHint hint k v wm@(TWordMap ok _ mv _)
   | k == ok, Just ov <- mv, ptrEq v ov = return wm
   | otherwise = do
-    wm' <- focusHint hint k wm
+    wm' <- focusWithHint hint k wm
     return $! wm' { transientFingerValue = Just v }
-{-# INLINE insertHint #-}
+{-# INLINE insertWithHint #-}
 
 insertM :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-insertM = insertHint warm
+insertM k v wm = insertWithHint warm k v wm
 {-# INLINE insertM #-}
 
 insert :: Key -> a -> WordMap a -> WordMap a
-insert k v = modify (insertHint cold k v)
+insert k v wm = modify (insertWithHint cold k v) wm
 {-# INLINE insert #-}
 
-deleteHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-deleteHint hint k wm = focusHint hint k wm >>= \ wm' -> case transientFingerValue wm' of
-  Nothing -> return wm'
-  _       -> return $! wm' { transientFingerValue = Nothing }
-{-# INLINE deleteHint #-}
+deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+deleteWithHint hint k wm = do
+  wm' <- focusWithHint hint k wm
+  case transientFingerValue wm' of
+    Nothing -> return wm'
+    _       -> return $! wm' { transientFingerValue = Nothing }
+{-# INLINE deleteWithHint #-}
 
 deleteM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-deleteM = deleteHint warm
+deleteM k wm = deleteWithHint warm k wm
 {-# INLINE deleteM #-}
 
 delete :: Key -> WordMap a -> WordMap a
-delete k = modify (deleteHint cold k)
+delete k wm = modify (deleteWithHint cold k) wm
 {-# INLINE delete #-}
 
 --------------------------------------------------------------------------------
@@ -498,8 +506,6 @@ instance IsList (WordMap a) where
 
   toList = ifoldr (\i a r -> (i, a): r) []
   {-# INLINE toList #-}
-
-  -- fromList = foldl' (\r (k,v) -> insert k v r) empty
 
   fromList xs = runST $ do
      o <- foldM (\r (k,v) -> insertM k v r) emptyM xs
