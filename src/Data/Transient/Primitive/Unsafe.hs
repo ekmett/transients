@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE Unsafe #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
@@ -23,8 +24,10 @@ import Data.Transient.Primitive.SmallArray
 import GHC.Exts
 import Unsafe.Coerce
 
+#ifndef HLINT
 foreign import prim "checkMutableArrayzh"      unsafeCheckMutableArray#      :: MutableArray# s a -> State# s -> (# State# s, Int# #) 
 foreign import prim "checkSmallMutableArrayzh" unsafeCheckSmallMutableArray# :: SmallMutableArray# s a -> State# s -> (# State# s, Int# #)
+#endif
 
 -- | This returns 'True' if the 'MutableArray' is unfrozen and can still be mutated.
 unsafeCheckMutableArray :: PrimMonad m => MutableArray (PrimState m) a -> m Bool
