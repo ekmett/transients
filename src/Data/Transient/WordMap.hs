@@ -28,8 +28,14 @@ module Data.Transient.WordMap
   , focus
   , trim
 
+  -- * Conversion
+  , Transient
+  , freeze
+  , thaw
+  , modify
+  , query
+
   -- * Transient API
-  , TWordMap
   , singletonM
   , emptyM
   , insertM
@@ -37,12 +43,6 @@ module Data.Transient.WordMap
   , lookupM
   , focusM
   , trimM
-
-  -- * Conversion
-  , freeze
-  , thaw
-  , modify
-  , query
 
   -- * Enumeration
   , fromList
@@ -52,6 +52,7 @@ module Data.Transient.WordMap
   , Key
   ) where
 
+import Data.Transient.Frozen
 import Data.Transient.WordMap.Internal
 import GHC.Exts as Exts
 import Prelude hiding (lookup)

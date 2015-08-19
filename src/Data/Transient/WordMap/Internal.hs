@@ -11,6 +11,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UnboxedTuples #-}
 -- {-# OPTIONS_GHC -fobject-code -fno-full-laziness -fno-cse #-}
 {-# OPTIONS_GHC -ddump-simpl -dsuppress-all #-}
@@ -43,6 +44,7 @@ import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
 import Data.Foldable (fold)
+import Data.Transient.Frozen
 import Data.Transient.Primitive.SmallArray
 import Data.Transient.Primitive.Unsafe
 import Data.Word
@@ -120,26 +122,13 @@ data TNode s a
   | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
   | TTip  {-# UNPACK #-} !Key a
 
--- | This is a transient WordMap.
-data TWordMap s a = TWordMap
-  { transientFingerKey  :: {-# UNPACK #-} !Key
-  , transientFingerMask :: {-# UNPACK #-} !Mask
-  , transientFingerValue :: !(Maybe a)
-  , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
-  }
-
-frozen :: (forall s. TWordMap s a) -> WordMap a
+frozen :: (forall s. Transient WordMap s a) -> WordMap a
 frozen = unsafeCoerce
-
--- | O(1) worst-case conversion from an immutable structure to a mutable one
-thaw :: WordMap a -> TWordMap s a
-thaw = unsafeCoerce
-{-# INLINE thaw #-}
 
 reallyUnsafeFreezeTNode :: TNode s a -> Node a
 reallyUnsafeFreezeTNode = unsafeCoerce
 
-reallyUnsafeFreeze :: TWordMap s a -> WordMap a
+reallyUnsafeFreeze :: Transient WordMap s a -> WordMap a
 reallyUnsafeFreeze = unsafeCoerce
 {-# INLINE reallyUnsafeFreeze #-}
 
@@ -147,34 +136,52 @@ reallyUnsafeFreeze = unsafeCoerce
 -- * Transient WordMaps
 --------------------------------------------------------------------------------
 
--- | O(1) amortized conversion from a mutable structure to an immutable one
-freeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
-freeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
-    go ns0
-    return (reallyUnsafeFreeze r)
-  where
-    go :: SmallMutableArray s (TNode s a) -> ST s ()
-    go ns = unsafeCheckSmallMutableArray ns >>= \case
-      True  -> walk ns (sizeOfSmallMutableArray ns - 1)
-      False -> return ()
-    walk :: SmallMutableArray s (TNode s a) -> Int -> ST s ()
-    walk ns !i
-      | i >= 0 = readSmallArray ns i >>= \case
-        TNode _ _ _ as -> do go as; walk ns (i - 1)
-        TFull _ _ as   -> do go as; walk ns (i - 1)
-        _              -> return ()
-      | otherwise = return ()
-{-# NOINLINE freeze #-}
+{-# RULES "freeze/thaw" forall m. freezeWordMap (unsafeCoerce m) = return m #-}
 
+freezeWordMap :: PrimMonad m => Transient WordMap (PrimState m) a -> m (WordMap a)
+freezeWordMap r@(TWordMap _ _ _ ns0) = primToPrim $ do
+   go ns0
+   return (reallyUnsafeFreeze r)
+ where
+   go :: SmallMutableArray s (TNode s a) -> ST s ()
+   go ns = unsafeCheckSmallMutableArray ns >>= \case
+     True  -> walk ns (sizeOfSmallMutableArray ns - 1)
+     False -> return ()
+   walk :: SmallMutableArray s (TNode s a) -> Int -> ST s ()
+   walk ns !i
+     | i >= 0 = readSmallArray ns i >>= \case
+       TNode _ _ _ as -> do go as; walk ns (i - 1)
+       TFull _ _ as   -> do go as; walk ns (i - 1)
+       _              -> return ()
+     | otherwise = return ()
+{-# NOINLINE freezeWordMap #-}
+
+instance Frozen WordMap where
+  data Transient WordMap s a = TWordMap
+    { transientFingerKey  :: {-# UNPACK #-} !Key
+    , transientFingerMask :: {-# UNPACK #-} !Mask
+    , transientFingerValue :: !(Maybe a)
+    , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
+    }
+
+  thaw = unsafeCoerce
+  {-# INLINE thaw #-}
+
+  freeze = freezeWordMap
+  {-# INLINE freeze #-}
+  
 empty :: WordMap a
 empty = frozen emptyM
 {-# NOINLINE empty #-}
 
 emptySmallMutableArray :: SmallMutableArray s a
-emptySmallMutableArray = runST $ unsafeCoerce <$> newSmallArray 0 undefined
+emptySmallMutableArray = runST $ do
+  x <- newSmallArray 0 undefined
+  _ <- unsafeFreezeSmallArray x
+  return (unsafeCoerce x)
 {-# NOINLINE emptySmallMutableArray #-}
 
-emptyM :: TWordMap s a
+emptyM :: Transient WordMap s a
 emptyM = TWordMap 0 0 Nothing emptySmallMutableArray
 {-# INLINE emptyM #-}
 
@@ -183,7 +190,7 @@ singleton :: Key -> a -> WordMap a
 singleton k v = WordMap k 0 (Just v) mempty
 {-# INLINE singleton #-}
 
-singletonM :: Key -> a -> TWordMap s a
+singletonM :: Key -> a -> Transient WordMap s a
 singletonM k v = TWordMap k 0 (Just v) emptySmallMutableArray
 {-# INLINE singletonM #-}
 
@@ -191,7 +198,7 @@ lookup :: Key -> WordMap a -> Maybe a
 lookup k m = runST (lookupM k (thaw m))
 {-# INLINEABLE lookup #-}
 
-lookupM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (Maybe a)
+lookupM :: PrimMonad m => Key -> Transient WordMap (PrimState m) a -> m (Maybe a)
 lookupM k0 (TWordMap ok m mv mns)
   | k0 == ok = return mv
   | b <- apogee k0 ok = if
@@ -376,7 +383,7 @@ unI# (I# i) = i
 -- Normally we only do this lazily as the finger moves out of a given area, but if you have
 -- particularly burdensome items for the garbage collector it may be worth paying this price
 -- to explicitly allow them to go free.
-trimM :: PrimMonad m => TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+trimM :: PrimMonad m => Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 trimM wm@(TWordMap _ 0 _ _)    = return wm
 trimM wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>= \case
     True -> go k0 ns ns (n-1) wm0
@@ -385,7 +392,7 @@ trimM wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >
       go k0 ns' ns (n-1) (TWordMap k0 m mv ns')
   where
     n = sizeOfSmallMutableArray ns
-    go :: Key -> SmallMutableArray s (TNode s a) -> SmallMutableArray s (TNode s a) -> Int -> TWordMap s a -> ST s (TWordMap s a)
+    go :: Key -> SmallMutableArray s (TNode s a) -> SmallMutableArray s (TNode s a) -> Int -> Transient WordMap s a -> ST s (Transient WordMap s a)
     go k dst src i wm
       | i >= 0 = do
         x <- readSmallArray src i
@@ -402,7 +409,7 @@ trimM wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >
 trim :: WordMap a -> WordMap a
 trim = modify trimM
 
-focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
   | m0 == 0 = case mv0 of
@@ -451,30 +458,10 @@ focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
       | k == ok = case newSmallArray# h# undefined s of (# s', ms #) -> (# s', ms, int2Word# 0#, Just v #)
       | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced TTip]
 
--- | Modify an immutable structure with mutable operations.
---
--- @modify f wm@ passed @f@ a "frozen" transient that may be reused.
-modify :: (forall s. TWordMap s a -> ST s (TWordMap s b)) -> WordMap a -> WordMap b
-modify f wm = runST $ do
-  mwm <- f (thaw wm)
-  freeze mwm
-{-# INLINE modify #-}
-
-{-# RULES "freeze/thaw" forall m. freeze (unsafeCoerce m) = return m #-}
-
--- | Query a mutable structure with queries designed for an immutable structure.
---
--- This does _not_ destroy the transient, although, it does mean subsequent actions need to copy-on-write from scratch.
---
--- After @query f wm@, @wm@ is considered frozen and may be reused.
-query :: PrimMonad m => (WordMap a -> r) -> TWordMap (PrimState m) a -> m r
-query f t = f <$> freeze t
-{-# INLINE query #-}
-
 -- | This changes the location of the focus in a mutable map. Operations near the focus are considerably cheaper.
 --
 -- @focusM k wm@ invalidates any unfrozen transient @wm@ it is passed
-focusM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+focusM :: PrimMonad m => Key -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 focusM = focusWithHint warm
 {-# INLINE focusM #-}
 
@@ -483,7 +470,7 @@ focus :: Key -> WordMap a -> WordMap a
 focus k wm = modify (focusWithHint cold k) wm
 {-# INLINE focus #-}
 
-insertWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+insertWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 insertWithHint hint k v wm@(TWordMap ok _ mv _)
   | k == ok, Just ov <- mv, ptrEq v ov = return wm
   | otherwise = do
@@ -494,7 +481,7 @@ insertWithHint hint k v wm@(TWordMap ok _ mv _)
 -- | O(log n) mutable insert.
 -- 
 -- @insertM k v wm@ invalidates any unfrozen transient @wm@ it is passed
-insertM :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+insertM :: PrimMonad m => Key -> a -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 insertM k v wm = insertWithHint warm k v wm
 {-# INLINE insertM #-}
 
@@ -503,7 +490,7 @@ insert :: Key -> a -> WordMap a -> WordMap a
 insert k v wm = modify (insertWithHint cold k v) wm
 {-# INLINE insert #-}
 
-deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 deleteWithHint hint k wm = do
   wm' <- focusWithHint hint k wm
   case transientFingerValue wm' of
@@ -512,7 +499,7 @@ deleteWithHint hint k wm = do
 {-# INLINE deleteWithHint #-}
 
 -- | O(log n) mutable delete. @deleteM k v wm@ invalidates any unfrozen transient it is passed.
-deleteM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+deleteM :: PrimMonad m => Key -> Transient WordMap (PrimState m) a -> m (Transient WordMap (PrimState m) a)
 deleteM k wm = deleteWithHint warm k wm
 {-# INLINE deleteM #-}
 
@@ -566,7 +553,7 @@ instance AsEmpty (WordMap a) where
     WordMap _ 0 Nothing _ -> Right ()
     t -> Left t
 
-instance AsEmpty (TWordMap s a) where
+instance AsEmpty (Transient WordMap s a) where
   _Empty = prism (const emptyM) $ \s -> case s of
     TWordMap _ 0 Nothing _ -> Right ()
     t -> Left t
@@ -600,4 +587,4 @@ instance Ord v => Ord (WordMap v) where
   compare as bs = compare (Exts.toList as) (Exts.toList bs)
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
--- TODO: instance Eq (TWordMap s)
+-- TODO: instance Eq (Transient WordMap s)
