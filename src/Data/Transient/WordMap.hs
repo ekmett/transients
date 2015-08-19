@@ -18,9 +18,10 @@
 -- In addition, we support transient access patterns.
 --------------------------------------------------------------------------------
 module Data.Transient.WordMap
-  ( 
+  (
   -- * Persistent API
     WordMap
+  -- ** Combinators
   , singleton
   , empty
   , insert
@@ -28,9 +29,16 @@ module Data.Transient.WordMap
   , lookup
   , focus
   , trim
+  , fromList
+  , Exts.toList
 
   -- * Transient API
   , TWordMap
+  , transient
+  , persistent
+  , modify
+  , query
+  -- ** Combinators
   , singletonT
   , emptyT
   , insertT
@@ -38,11 +46,16 @@ module Data.Transient.WordMap
   , lookupT
   , focusT
   , trimT
-  , transient
-  , persistent
+  , fromListT
+  , toListT
 
   -- * Mutable API
   , MWordMap
+  , thaw
+  , freeze
+  , modifyM
+  , queryM
+  -- ** Combinators
   , singletonM
   , emptyM
   , insertM
@@ -50,18 +63,8 @@ module Data.Transient.WordMap
   , lookupM
   , focusM
   , trimM
-  , thaw
-  , freeze
-
-  -- * Conversion
-  , modify
-  , modifyM
-  , query
-  , queryM
-
-  -- * Enumeration
-  , fromList
-  , Exts.toList
+  , fromListM
+  , toListM
 
   -- * Misc.
   , Key

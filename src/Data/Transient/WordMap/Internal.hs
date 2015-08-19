@@ -275,13 +275,13 @@ modifyM f (MWordMap r) = do
 --
 -- After @query f wm@, @wm@ is considered persisted and may be reused.
 query :: PrimMonad m => (WordMap a -> r) -> TWordMap (PrimState m) a -> m r
-query f t = f <$> persistent t
+query f t = stToPrim $ f <$> persistent t
 {-# INLINE query #-}
 
 -- | Query a mutable structure with queries designed for an immutable structure.
 queryM :: PrimMonad m => (WordMap a -> r) -> MWordMap (PrimState m) a -> m r
-queryM f (MWordMap m) = do
-  t <- readMutVar m 
+queryM f (MWordMap m) = stToPrim $ do
+  t <- readMutVar m
   query f t
 {-# INLINE queryM #-}
 
@@ -550,7 +550,7 @@ insertWithHint hint k v wm@(TWordMap ok _ mv _)
 {-# INLINE insertWithHint #-}
 
 -- | Transient insert.
--- 
+--
 -- @insertT k v wm@ invalidates any unpersisted transient @wm@ it is passed
 insertT :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 insertT k v wm = insertWithHint warm k v wm
@@ -600,7 +600,7 @@ instance IsList (WordMap a) where
   {-# INLINE toList #-}
 
   fromList xs = runST $ do
-     o <- foldM (\r (k,v) -> insertT k v r) emptyT xs
+     o <- fromListT xs
      persistent o
   {-# INLINE fromList #-}
 
@@ -671,4 +671,25 @@ instance Ord v => Ord (WordMap v) where
   compare as bs = compare (Exts.toList as) (Exts.toList bs)
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
--- TODO: instance Eq (TWordMap s)
+
+stToPrim :: PrimMonad m => ST (PrimState m) a -> m a
+stToPrim = primToPrim
+{-# INLINE stToPrim #-}
+
+fromListT :: PrimMonad m => [(Word64, a)] -> m (TWordMap (PrimState m) a)
+fromListT xs = stToPrim $ foldM (\r (k,v) -> insertT k v r) emptyT xs
+{-# INLINE fromListT #-}
+
+toListT :: PrimMonad m => TWordMap (PrimState m) a -> m [(Word64, a)]
+toListT = query Exts.toList
+{-# INLINE toListT #-}
+
+fromListM :: PrimMonad m => [(Word64, a)] -> m (MWordMap (PrimState m) a)
+fromListM xs = stToPrim $ do
+  o <- fromListT xs
+  MWordMap <$> newMutVar o
+{-# INLINE fromListM #-}
+
+toListM :: PrimMonad m => MWordMap (PrimState m) a -> m [(Word64, a)]
+toListM = queryM Exts.toList
+{-# INLINE toListM #-}
