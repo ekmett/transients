@@ -159,7 +159,6 @@ copySmallMutableArray :: PrimMonad m
           -> Int                             -- ^ number of elements to copy
           -> m ()
 {-# INLINE copySmallMutableArray #-}
--- NOTE: copySmallArray# and copySmallMutableArray# are slightly broken in GHC 7.6.* and earlier
 copySmallMutableArray (SmallMutableArray dst#) (I# doff#)
                  (SmallMutableArray src#) (I# soff#) (I# len#)
   = primitive_ (copySmallMutableArray# src# soff# dst# doff# len#)
