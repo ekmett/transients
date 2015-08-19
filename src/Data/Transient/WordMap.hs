@@ -48,11 +48,12 @@ module Data.Transient.WordMap
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
+import Control.Lens hiding (index)
 import Control.Monad
 import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
-import Data.Foldable (foldl')
+import Data.Foldable (fold)
 import Data.Transient.Primitive.SmallArray
 import Data.Transient.Primitive.Unsafe
 import Data.Word
@@ -117,15 +118,50 @@ data Node s a
   | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s a))
   | Tip  {-# UNPACK #-} !Key a
 
-
 --------------------------------------------------------------------------------
 -- * WordMaps
 --------------------------------------------------------------------------------
 
+#if QUANTIFIED
+
 newtype WordMap a = Frozen { thaw :: forall s. TWordMap s a }
 
+frozen :: (forall s. TWordMap s a) -> WordMap a
+frozen = Frozen
+
+#else
+
+data FrozenNode a 
+  = FrozenFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallArray (FrozenNode a))
+  | FrozenNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (FrozenNode a))
+  | FrozenTip  {-# UNPACK #-} !Key a
+  deriving (Functor,Foldable,Show)
+
+data WordMap a = FrozenWordMap
+  { frozenFingerKey :: {-# UNPACK #-} !Key
+  , frozenFingerMask :: {-# UNPACK #-} !Mask
+  , frozenFingerValue :: !(Maybe a)
+  , frozenFingerPath :: {-# UNPACK #-} !(SmallArray (FrozenNode a))
+  } deriving (Functor,Show)
+
+frozen :: (forall s. TWordMap s a) -> WordMap a
+frozen = unsafeCoerce
+
+thaw :: WordMap a -> TWordMap s a 
+thaw = unsafeCoerce
+
+reallyUnsafeFreezeNode :: Node s a -> FrozenNode a
+reallyUnsafeFreezeNode = unsafeCoerce
+
+#endif
+
 -- | This is a transient WordMap.
-data TWordMap s a = WordMap {-# UNPACK #-} !Key {-# UNPACK #-} !Mask !(Maybe a) {-# UNPACK #-} !(SmallMutableArray s (Node s a))
+data TWordMap s a = WordMap 
+  { fingerKey   :: {-# UNPACK #-} !Key
+  , fingerMask  :: {-# UNPACK #-} !Mask
+  , fingerValue :: !(Maybe a)
+  , fingerPath  :: {-# UNPACK #-} !(SmallMutableArray s (Node s a))
+  }
 
 --------------------------------------------------------------------------------
 -- * Transient WordMaps
@@ -153,7 +189,7 @@ unsafeFreeze r@(WordMap _ _ _ ns0) = primToPrim $ do
       | otherwise = return ()
 
 empty :: WordMap a
-empty = Frozen emptyM
+empty = frozen emptyM
 {-# NOINLINE empty #-}
 
 emptySmallMutableArray :: SmallMutableArray s a
@@ -166,7 +202,7 @@ emptyM = WordMap 0 0 Nothing emptySmallMutableArray
 
 -- | Build a singleton Node
 singleton :: Key -> a -> WordMap a
-singleton k v = Frozen (singletonM k v)
+singleton k v = frozen (singletonM k v)
 {-# INLINE singleton #-}
 
 singletonM :: Key -> a -> TWordMap s a
@@ -281,11 +317,10 @@ unplug hint !k on@(Node ok n m as)
   where !wd = unsafeShiftR (xor k ok) n
 unplug _ _ on = return on
 
-canonical :: PrimMonad m => Hint (PrimState m) -> WordMap a -> m (Maybe (Node (PrimState m) a))
-canonical hint wm = primToPrim $ case thaw wm of
-  WordMap _ 0 Nothing _  -> return Nothing
-  WordMap k _ Nothing ns -> Just <$> unplugPath hint k 0 (sizeOfSmallMutableArray ns) ns
-  WordMap k _ (Just v) ns -> Just <$> plugPath hint k 0 (sizeOfSmallMutableArray ns) (Tip k v) ns
+canonical :: WordMap a -> Maybe (FrozenNode a)
+canonical wm = runST $ case thaw wm of
+  WordMap _ 0 Nothing _ -> return Nothing
+  WordMap k _ mv ns -> Just . reallyUnsafeFreezeNode <$> replugPath cold k 0 (sizeOfSmallMutableArray ns) mv ns
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
@@ -360,12 +395,17 @@ unI# (I# i) = i
 
 -- create a 1-hole context at key k, destroying any previous contents of that position.
 
+-- do we want to make this eager at scrubbing the parent pointers?
+
 focusHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
   | m0 == 0 = case mv0 of
-    Nothing -> return (WordMap k0 0 Nothing ns0) -- note: ns0 is empty, we could use a global 'emptySmallMutableArray' here
-    Just v  -> WordMap k0 (unsafeShiftL 1 (unsafeShiftR (level (xor ok0 k0)) 2)) Nothing <$> newSmallArray 1 (Tip ok0 v)
+    Nothing -> return (WordMap k0 0 Nothing emptySmallMutableArray)
+    Just v  -> do
+      ns <- newSmallArray 1 (Tip ok0 v)
+      apply hint ns
+      return $! WordMap k0 (unsafeShiftL 1 (unsafeShiftR (level (xor ok0 k0)) 2)) Nothing ns
   | kept <- m0 .&. unsafeShiftL 0xfffe (unsafeShiftR (level (xor ok0 k0)) 2)
   , nkept@(I# nkept#) <- popCount kept
   , top@(I# top#) <- sizeOfSmallMutableArray ns0 - nkept
@@ -423,8 +463,8 @@ insertHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimSta
 insertHint hint k v wm@(WordMap ok _ mv _)
   | k == ok, Just ov <- mv, ptrEq v ov = return wm
   | otherwise = do
-    WordMap ok' m' _ as' <- focusHint hint k wm 
-    return $ WordMap ok' m' (Just v) as'
+    wm' <- focusHint hint k wm 
+    return $! wm' { fingerValue = Just v }
 {-# INLINE insertHint #-}
 
 insertM :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
@@ -436,9 +476,9 @@ insert k v = modify (insertHint cold k v)
 {-# INLINE insert #-}
 
 deleteHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-deleteHint hint k wm = focusHint hint k wm >>= \case
-  wm'@(WordMap _ _ Nothing _) -> return wm'
-  WordMap ok' m' _ as' -> return (WordMap ok' m' Nothing as')
+deleteHint hint k wm = focusHint hint k wm >>= \ wm' -> case fingerValue wm' of
+  Nothing -> return wm'
+  _       -> return $! wm' { fingerValue = Nothing }
 {-# INLINE deleteHint #-}
 
 deleteM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
@@ -453,6 +493,7 @@ delete k = modify (deleteHint cold k)
 -- * Instances
 --------------------------------------------------------------------------------
 
+{-
 instance NFData a => NFData (WordMap a) where
   rnf wm = runST $ case thaw wm of WordMap _ _ mv ns -> rnf mv `seq` array ns (sizeOfSmallMutableArray ns - 1)
     where
@@ -468,78 +509,77 @@ instance NFData a => NFData (WordMap a) where
       step (Node _ _ _ as) = array as (sizeOfSmallMutableArray as - 1)
       step (Full _ _ as)   = array as 16
       step (Tip _ v)       = rnf v `seq` return ()
+-}
 
 instance IsList (WordMap a) where
   type Item (WordMap a) = (Word64, a)
 
-{-
   toList = ifoldr (\i a r -> (i, a): r) []
   {-# INLINE toList #-}
--}
 
-  fromList = foldl' (\r (k,v) -> insert k v r) empty
+  -- fromList = foldl' (\r (k,v) -> insert k v r) empty
 
-{-
   fromList xs = runST $ do
      o <- foldM (\r (k,v) -> insertM k v r) emptyM xs
      unsafeFreeze o
   {-# INLINE fromList #-}
--}
 
   fromListN _ = fromList
   {-# INLINE fromListN #-}
 
 -- stuff to eventually clean up and reintroduce
       
-{-
-
 type instance Index (WordMap a) = Key
 type instance IxValue (WordMap a) = a
 
 instance At (WordMap a) where
-  at k f wm@(WordMap p@(Path ok _ _) mv)
-    | k == ok = WordMap p <$> f mv
-    | otherwise = let c = path k wm in WordMap c <$> f (lookup k wm)
+  at k f wm = let c = focus k wm in f (lookup k wm) <&> \mv' -> c { frozenFingerValue = mv' }
   {-# INLINE at #-}
 
 instance Ixed (WordMap a) where
   ix k f wm = case lookup k wm of
     Nothing -> pure wm
-    Just v -> let c = path k wm in f v <&> \v' -> WordMap c (Just v')
+    Just v  -> let c = focus k wm in f v <&> \v' -> c { frozenFingerValue = Just v' }
 
-instance NFData a => NFData (Node s a) where
-  rnf (Full _ _ a)   = rnf a
-  rnf (Node _ _ _ a) = rnf a
-  rnf (Tip _ v)      = rnf v
+instance NFData a => NFData (FrozenNode a) where
+  rnf (FrozenFull _ _ a)   = rnf a
+  rnf (FrozenNode _ _ _ a) = rnf a
+  rnf (FrozenTip _ v)      = rnf v
 
-instance NFData v => NFData (WordMap v) where
-  rnf (WordMap (Path _ _ as) mv) = rnf as `seq` rnf mv
+instance NFData a => NFData (WordMap a) where
+  rnf (FrozenWordMap _ _ mv as) = rnf mv `seq` rnf as
 
 instance AsEmpty (WordMap a) where
   _Empty = prism (const empty) $ \s -> case s of
-    WordMap (Path _ 0 _) Nothing -> Right ()
+    FrozenWordMap _ 0 Nothing _ -> Right ()
+    t -> Left t
+
+instance AsEmpty (TWordMap s a) where
+  _Empty = prism (const emptyM) $ \s -> case s of
+    WordMap _ 0 Nothing _ -> Right ()
     t -> Left t
 
 instance FunctorWithIndex Word64 WordMap where
-  imap f (WordMap (Path k n as) mv) = WordMap (Path k n (fmap (imap f) as)) (fmap (f k) mv)
+  imap f (FrozenWordMap k n mv as) = FrozenWordMap k n (fmap (f k) mv) (fmap (imap f) as)
 
-instance FunctorWithIndex Word64 Node where
-  imap f (Node k n m as) = Node k n m (fmap (imap f) as)
-  imap f (Tip k v) = Tip k (f k v)
-  imap f (Full k n as) = Full k n (fmap (imap f) as)
+instance FunctorWithIndex Word64 FrozenNode where
+  imap f (FrozenNode k n m as) = FrozenNode k n m (fmap (imap f) as)
+  imap f (FrozenTip k v)       = FrozenTip k (f k v)
+  imap f (FrozenFull k n as)   = FrozenFull k n (fmap (imap f) as)
 
 instance Foldable WordMap where
+  fold wm      = foldMap fold (canonical wm)
   foldMap f wm = foldMap (foldMap f) (canonical wm)
-  null (WordMap (Path _ 0 _) Nothing) = True
-  null _ = False
+  null (FrozenWordMap _ 0 Nothing _) = True
+  null _                       = False
 
 instance FoldableWithIndex Word64 WordMap where
   ifoldMap f wm = foldMap (ifoldMap f) (canonical wm)
 
-instance FoldableWithIndex Word64 Node where
-  ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
-  ifoldMap f (Tip k v) = f k v
-  ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
+instance FoldableWithIndex Word64 FrozenNode where
+  ifoldMap f (FrozenNode _ _ _ as) = foldMap (ifoldMap f) as
+  ifoldMap f (FrozenTip k v) = f k v
+  ifoldMap f (FrozenFull _ _ as) = foldMap (ifoldMap f) as
 
 instance Eq v => Eq (WordMap v) where
   as == bs = Exts.toList as == Exts.toList bs
@@ -548,5 +588,3 @@ instance Ord v => Ord (WordMap v) where
   compare as bs = compare (Exts.toList as) (Exts.toList bs)
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
--}
-
