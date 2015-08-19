@@ -53,6 +53,7 @@ library
     primitive
 
   exposed-modules:
+    Data.Transient.Frozen
     Data.Transient.Primitive.Exts
     Data.Transient.Primitive.PrimRef
     Data.Transient.Primitive.SmallArray
