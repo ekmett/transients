@@ -99,53 +99,46 @@ apogee :: Key -> Key -> Mask
 apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 
 --------------------------------------------------------------------------------
--- * Nodes
+-- * TNodes
 --------------------------------------------------------------------------------
 
-data Node s a 
-  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (Node s a))
-  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s a))
-  | Tip  {-# UNPACK #-} !Key a
+data TNode s a
+  = TFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (TNode s a))
+  | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
+  | TTip  {-# UNPACK #-} !Key a
 
 --------------------------------------------------------------------------------
 -- * WordMaps
 --------------------------------------------------------------------------------
 
-{-
-newtype WordMap a = Frozen { thaw :: forall s. TWordMap s a }
-
-frozen :: (forall s. TWordMap s a) -> WordMap a
-frozen = Frozen
--}
-
-data FrozenNode a 
-  = FrozenFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallArray (FrozenNode a))
-  | FrozenNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (FrozenNode a))
-  | FrozenTip  {-# UNPACK #-} !Key a
+data Node a
+  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallArray (Node a))
+  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (Node a))
+  | Tip  {-# UNPACK #-} !Key a
   deriving (Functor,Foldable,Show)
 
-data WordMap a = FrozenWordMap
-  { frozenFingerKey :: {-# UNPACK #-} !Key
-  , frozenFingerMask :: {-# UNPACK #-} !Mask
-  , frozenFingerValue :: !(Maybe a)
-  , frozenFingerPath :: {-# UNPACK #-} !(SmallArray (FrozenNode a))
+data WordMap a = WordMap
+  { fingerKey   :: {-# UNPACK #-} !Key
+  , fingerMask  :: {-# UNPACK #-} !Mask
+  , fingerValue :: !(Maybe a)
+  , fingerPath  :: {-# UNPACK #-} !(SmallArray (Node a))
   } deriving (Functor,Show)
 
 frozen :: (forall s. TWordMap s a) -> WordMap a
 frozen = unsafeCoerce
 
-thaw :: WordMap a -> TWordMap s a 
+thaw :: WordMap a -> TWordMap s a
 thaw = unsafeCoerce
 
-reallyUnsafeFreezeNode :: Node s a -> FrozenNode a
-reallyUnsafeFreezeNode = unsafeCoerce
+reallyUnsafeFreezeTNode :: TNode s a -> Node a
+reallyUnsafeFreezeTNode = unsafeCoerce
 
 -- | This is a transient WordMap.
-data TWordMap s a = WordMap 
-  { fingerKey   :: {-# UNPACK #-} !Key
-  , fingerMask  :: {-# UNPACK #-} !Mask
-  , fingerValue :: !(Maybe a)
-  , fingerPath  :: {-# UNPACK #-} !(SmallMutableArray s (Node s a))
+data TWordMap s a = TWordMap
+  { transientFingerKey  :: {-# UNPACK #-} !Key
+  , transientFingerMask :: {-# UNPACK #-} !Mask
+  , transientFingerValue :: !(Maybe a)
+  , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
   }
 
 --------------------------------------------------------------------------------
@@ -157,19 +150,19 @@ reallyUnsafeFreeze = unsafeCoerce
 {-# INLINE reallyUnsafeFreeze #-}
 
 unsafeFreeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
-unsafeFreeze r@(WordMap _ _ _ ns0) = primToPrim $ do
-    go ns0 
+unsafeFreeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
+    go ns0
     return (reallyUnsafeFreeze r)
   where
-    go :: SmallMutableArray s (Node s a) -> ST s ()
+    go :: SmallMutableArray s (TNode s a) -> ST s ()
     go ns = unsafeCheckSmallMutableArray ns >>= \case
       True  -> walk ns (sizeOfSmallMutableArray ns - 1)
       False -> return ()
-    walk :: SmallMutableArray s (Node s a) -> Int -> ST s ()
+    walk :: SmallMutableArray s (TNode s a) -> Int -> ST s ()
     walk ns !i
       | i >= 0 = readSmallArray ns i >>= \case
-        Node _ _ _ as -> do go as; walk ns (i - 1)
-        Full _ _ as   -> do go as; walk ns (i - 1)
+        TNode _ _ _ as -> do go as; walk ns (i - 1)
+        TFull _ _ as   -> do go as; walk ns (i - 1)
         _              -> return ()
       | otherwise = return ()
 
@@ -182,16 +175,16 @@ emptySmallMutableArray = runST $ unsafeCoerce <$> newSmallArray 0 undefined
 {-# NOINLINE emptySmallMutableArray #-}
 
 emptyM :: TWordMap s a
-emptyM = WordMap 0 0 Nothing emptySmallMutableArray
+emptyM = TWordMap 0 0 Nothing emptySmallMutableArray
 {-# INLINE emptyM #-}
 
--- | Build a singleton Node
+-- | Build a singleton TNode
 singleton :: Key -> a -> WordMap a
 singleton k v = frozen (singletonM k v)
 {-# INLINE singleton #-}
 
 singletonM :: Key -> a -> TWordMap s a
-singletonM k v = WordMap k 0 (Just v) emptySmallMutableArray
+singletonM k v = TWordMap k 0 (Just v) emptySmallMutableArray
 {-# INLINE singletonM #-}
 
 lookup :: Key -> WordMap a -> Maybe a
@@ -199,33 +192,33 @@ lookup k m = runST (lookupM k (thaw m))
 {-# INLINEABLE lookup #-}
 
 lookupM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (Maybe a)
-lookupM k0 (WordMap ok m mv mns)
+lookupM k0 (TWordMap ok m mv mns)
   | k0 == ok = return mv
   | b <- apogee k0 ok = if
     | m .&. b == 0 -> return Nothing
     | otherwise    -> do
       x <- readSmallArray mns (index m b)
-      primToPrim (lookupNodeM k0 x)
+      primToPrim (lookupTNodeM k0 x)
 {-# INLINEABLE lookupM #-}
 
-lookupNodeM :: Key -> Node s a -> ST s (Maybe a)
-lookupNodeM !k (Full ok o a)
+lookupTNodeM :: Key -> TNode s a -> ST s (Maybe a)
+lookupTNodeM !k (TFull ok o a)
   | z > 0xf   = return Nothing
   | otherwise = do
     x <- readSmallArray a (fromIntegral z)
-    lookupNodeM k x
+    lookupTNodeM k x
   where
     z = unsafeShiftR (xor k ok) o
-lookupNodeM k (Node ok o m a)
+lookupTNodeM k (TNode ok o m a)
   | z > 0xf      = return Nothing
   | m .&. b == 0 = return Nothing
   | otherwise = do
     x <- readSmallArray a (index m b)
-    lookupNodeM k x
+    lookupTNodeM k x
   where
     z = unsafeShiftR (xor k ok) o
     b = unsafeShiftL 1 (fromIntegral z)
-lookupNodeM k (Tip ok ov)
+lookupTNodeM k (TTip ok ov)
   | k == ok   = return (Just ov)
   | otherwise = return (Nothing)
 
@@ -273,44 +266,44 @@ deleteSmallArray hint i k = do
   return o
 {-# INLINEABLE deleteSmallArray #-}
 
-node :: Key -> Offset -> Mask -> SmallMutableArray s (Node s a) -> Node s a
-node k o 0xffff a = Full k o a
-node k o m a      = Node k o m a
+node :: Key -> Offset -> Mask -> SmallMutableArray s (TNode s a) -> TNode s a
+node k o 0xffff a = TFull k o a
+node k o m a      = TNode k o m a
 {-# INLINE node #-}
 
-fork :: Hint s -> Key -> Node s a -> Key -> Node s a -> ST s (Node s a)
+fork :: Hint s -> Key -> TNode s a -> Key -> TNode s a -> ST s (TNode s a)
 fork hint k n ok on = do
   arr <- newSmallArray 2 n
   writeSmallArray arr (fromEnum (k < ok)) on
   let o = level (xor k ok)
   apply hint arr
-  return $! Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) arr
+  return $! TNode (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) arr
 
 -- O(1) remove the _entire_ branch containing a given node from this tree, in situ
-unplug :: Hint s -> Key -> Node s a -> ST s (Node s a)
-unplug hint k on@(Full ok n as)
+unplug :: Hint s -> Key -> TNode s a -> ST s (TNode s a)
+unplug hint k on@(TFull ok n as)
   | wd >= 0xf = return on
-  | d <- fromIntegral wd = Node ok n (complement (unsafeShiftL 1 d)) <$> deleteSmallArray hint as d
+  | d <- fromIntegral wd = TNode ok n (complement (unsafeShiftL 1 d)) <$> deleteSmallArray hint as d
   where !wd = unsafeShiftR (xor k ok) n
-unplug hint !k on@(Node ok n m as)
+unplug hint !k on@(TNode ok n m as)
   | wd >= 0xf = return on
   | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0, p <- index m b =
     if sizeOfSmallMutableArray as == 2
      then readSmallArray as (1-p) -- keep the other node
-     else Node ok n (m .&. complement b) <$> deleteSmallArray hint as p
+     else TNode ok n (m .&. complement b) <$> deleteSmallArray hint as p
   | otherwise = return on
   where !wd = unsafeShiftR (xor k ok) n
 unplug _ _ on = return on
 
-canonical :: WordMap a -> Maybe (FrozenNode a)
+canonical :: WordMap a -> Maybe (Node a)
 canonical wm = runST $ case thaw wm of
-  WordMap _ 0 Nothing _ -> return Nothing
-  WordMap k _ mv ns -> Just . reallyUnsafeFreezeNode <$> replugPath cold k 0 (sizeOfSmallMutableArray ns) mv ns
+  TWordMap _ 0 Nothing _ -> return Nothing
+  TWordMap k _ mv ns -> Just . reallyUnsafeFreezeTNode <$> replugPath cold k 0 (sizeOfSmallMutableArray ns) mv ns
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
-plug :: Hint s -> Key -> Node s a -> Node s a -> ST s (Node s a)
-plug hint k z on@(Node ok n m as)
+plug :: Hint s -> Key -> TNode s a -> TNode s a -> ST s (TNode s a)
+plug hint k z on@(TNode ok n m as)
   | wd > 0xf = fork hint k z ok on
   | otherwise = do
     let d   = fromIntegral wd
@@ -328,12 +321,12 @@ plug hint k z on@(Node ok n m as)
           if ptrEq oz z
             then return on -- but we arent changing it
             else do -- here we are, and we need to copy on write
-              bs <- cloneSmallMutableArray as 0 odm 
+              bs <- cloneSmallMutableArray as 0 odm
               writeSmallArray bs odm z
               apply hint bs
-              return (Node ok n m bs)
+              return (TNode ok n m bs)
   where wd = unsafeShiftR (xor k ok) n
-plug hint k z on@(Full ok n as)
+plug hint k z on@(TFull ok n as)
   | wd > 0xf = fork hint k z ok on
   | otherwise = do
     let d = fromIntegral wd
@@ -350,13 +343,13 @@ plug hint k z on@(Full ok n as)
             bs <- cloneSmallMutableArray as 0 16
             writeSmallArray bs d z
             apply hint bs
-            return (Full ok n bs)
+            return (TFull ok n bs)
   where wd = unsafeShiftR (xor k ok) n
-plug hint k z on@(Tip ok _) = fork hint k z ok on
+plug hint k z on@(TTip ok _) = fork hint k z ok on
 
 -- | Given @k@ located under @acc@, @plugPath k i t acc ns@ plugs acc recursively into each of the nodes
 -- of @ns@ from @[i..t-1]@ from the bottom up
-plugPath :: Hint s -> Key -> Int -> Int -> Node s a -> SmallMutableArray s (Node s a) -> ST s (Node s a)
+plugPath :: Hint s -> Key -> Int -> Int -> TNode s a -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
 plugPath hint !k !i !t !acc !ns
   | i < t     = do
     x <- readSmallArray ns i
@@ -365,14 +358,14 @@ plugPath hint !k !i !t !acc !ns
   | otherwise = return acc
 
 -- this recurses into @plugPath@ deliberately.
-unplugPath :: Hint s -> Key -> Int -> Int -> SmallMutableArray s (Node s a) -> ST s (Node s a)
+unplugPath :: Hint s -> Key -> Int -> Int -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
 unplugPath hint k i t ns = do
   x <- readSmallArray ns i
   y <- unplug hint k x
   plugPath hint k (i+1) t y ns
 
-replugPath :: PrimMonad m => Hint (PrimState m) -> Key -> Int -> Int -> Maybe v -> SmallMutableArray (PrimState m) (Node (PrimState m) v) -> m (Node (PrimState m) v)
-replugPath hint k i t (Just v) ns = primToPrim $ plugPath hint k i t (Tip k v) ns
+replugPath :: PrimMonad m => Hint (PrimState m) -> Key -> Int -> Int -> Maybe v -> SmallMutableArray (PrimState m) (TNode (PrimState m) v) -> m (TNode (PrimState m) v)
+replugPath hint k i t (Just v) ns = primToPrim $ plugPath hint k i t (TTip k v) ns
 replugPath hint k i t Nothing ns  = primToPrim $ unplugPath hint k i t ns
 
 unI# :: Int -> Int#
@@ -383,14 +376,14 @@ unI# (I# i) = i
 -- do we want to make this eager at scrubbing the parent pointers?
 
 focusHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
+focusHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
   | m0 == 0 = case mv0 of
-    Nothing -> return (WordMap k0 0 Nothing emptySmallMutableArray)
+    Nothing -> return (TWordMap k0 0 Nothing emptySmallMutableArray)
     Just v  -> do
-      ns <- newSmallArray 1 (Tip ok0 v)
+      ns <- newSmallArray 1 (TTip ok0 v)
       apply hint ns
-      return $! WordMap k0 (unsafeShiftL 1 (unsafeShiftR (level (xor ok0 k0)) 2)) Nothing ns
+      return $! TWordMap k0 (unsafeShiftL 1 (unsafeShiftR (level (xor ok0 k0)) 2)) Nothing ns
   | kept <- m0 .&. unsafeShiftL 0xfffe (unsafeShiftR (level (xor ok0 k0)) 2)
   , nkept@(I# nkept#) <- popCount kept
   , top@(I# top#) <- sizeOfSmallMutableArray ns0 - nkept
@@ -399,37 +392,37 @@ focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
     primitive $ \s -> case go k0 nkept# root s of
       (# s', ms, m#, omv #) -> case copySmallMutableArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
         s'' -> case hint ms s'' of
-          s''' -> (# s''', WordMap k0 (kept .|. W16# m#) omv (SmallMutableArray ms) #)
+          s''' -> (# s''', TWordMap k0 (kept .|. W16# m#) omv (SmallMutableArray ms) #)
   where
-    deep :: Key -> Int# -> SmallMutableArray# s (Node s a) -> Int# -> Node s a -> Int# -> State# s ->
-      (# State# s, SmallMutableArray# s (Node s a), Word#, Maybe a #)
+    deep :: Key -> Int# -> SmallMutableArray# s (TNode s a) -> Int# -> TNode s a -> Int# -> State# s ->
+      (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
     deep k h# as d# on n# s = case readSmallArray# as d# s of
       (# s', on' #) -> case go k (h# +# 1#) on' s' of
         (# s'', ms, m#, mv #) -> case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h# -# 1#) on s'' of
           s''' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
             W16# m'# -> (# s''', ms, m'#, mv #)
 
-    shallow :: Int# -> Node s a -> Int# -> Maybe a -> State# s ->
-      (# State# s, SmallMutableArray# s (Node s a), Word#, Maybe a #)
+    shallow :: Int# -> TNode s a -> Int# -> Maybe a -> State# s ->
+      (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
     shallow h# on n# mv s = case newSmallArray# (h# +# 1#) on s of
       (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
         W16# m# -> (# s', ms, m#, mv #)
 
-    go :: Key -> Int# -> Node s a -> State# s -> (# State# s, SmallMutableArray# s (Node s a), Word#, Maybe a #)
-    go k h# on@(Full ok n@(I# n#) (SmallMutableArray as)) s
-      | wd > 0xf  = shallow h# on (unI# (level okk)) Nothing s -- we're a sibling of what we recursed into  -- [Displaced Full]
-      | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                           -- Parent Full : ..
+    go :: Key -> Int# -> TNode s a -> State# s -> (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
+    go k h# on@(TFull ok n@(I# n#) (SmallMutableArray as)) s
+      | wd > 0xf  = shallow h# on (unI# (level okk)) Nothing s -- we're a sibling of what we recursed into  -- [Displaced TFull]
+      | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                           -- Parent TFull : ..
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
-    go k h# on@(Node ok n@(I# n#) m (SmallMutableArray as)) s
-      | wd > 0xf = shallow h# on (unI# (level okk)) Nothing s                                            -- [Displaced Node]
-      | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0 = deep k h# as (unI# (index m b)) on n# s   -- Parent Node : ..
-      | otherwise = shallow h# on n# Nothing s                                                           -- [Node]
+    go k h# on@(TNode ok n@(I# n#) m (SmallMutableArray as)) s
+      | wd > 0xf = shallow h# on (unI# (level okk)) Nothing s                                            -- [Displaced TNode]
+      | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0 = deep k h# as (unI# (index m b)) on n# s   -- Parent TNode : ..
+      | otherwise = shallow h# on n# Nothing s                                                           -- [TNode]
       where !okk = xor k ok
             !wd = unsafeShiftR okk n
-    go k h# on@(Tip ok v) s 
+    go k h# on@(TTip ok v) s
       | k == ok = case newSmallArray# h# undefined s of (# s', ms #) -> (# s', ms, int2Word# 0#, Just v #)
-      | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced Tip]
+      | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced TTip]
 
 modify :: (forall s. TWordMap s a -> ST s (TWordMap s b)) -> WordMap a -> WordMap b
 modify f wm = runST $ do
@@ -445,11 +438,11 @@ focus :: Key -> WordMap a -> WordMap a
 focus k = modify (focusHint cold k)
 
 insertHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-insertHint hint k v wm@(WordMap ok _ mv _)
+insertHint hint k v wm@(TWordMap ok _ mv _)
   | k == ok, Just ov <- mv, ptrEq v ov = return wm
   | otherwise = do
-    wm' <- focusHint hint k wm 
-    return $! wm' { fingerValue = Just v }
+    wm' <- focusHint hint k wm
+    return $! wm' { transientFingerValue = Just v }
 {-# INLINE insertHint #-}
 
 insertM :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
@@ -461,9 +454,9 @@ insert k v = modify (insertHint cold k v)
 {-# INLINE insert #-}
 
 deleteHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-deleteHint hint k wm = focusHint hint k wm >>= \ wm' -> case fingerValue wm' of
+deleteHint hint k wm = focusHint hint k wm >>= \ wm' -> case transientFingerValue wm' of
   Nothing -> return wm'
-  _       -> return $! wm' { fingerValue = Nothing }
+  _       -> return $! wm' { transientFingerValue = Nothing }
 {-# INLINE deleteHint #-}
 
 deleteM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
@@ -495,58 +488,58 @@ instance IsList (WordMap a) where
   {-# INLINE fromListN #-}
 
 -- stuff to eventually clean up and reintroduce
-      
+
 type instance Index (WordMap a) = Key
 type instance IxValue (WordMap a) = a
 
 instance At (WordMap a) where
-  at k f wm = let c = focus k wm in f (lookup k wm) <&> \mv' -> c { frozenFingerValue = mv' }
+  at k f wm = let c = focus k wm in f (lookup k wm) <&> \mv' -> c { fingerValue = mv' }
   {-# INLINE at #-}
 
 instance Ixed (WordMap a) where
   ix k f wm = case lookup k wm of
     Nothing -> pure wm
-    Just v  -> let c = focus k wm in f v <&> \v' -> c { frozenFingerValue = Just v' }
+    Just v  -> let c = focus k wm in f v <&> \v' -> c { fingerValue = Just v' }
 
-instance NFData a => NFData (FrozenNode a) where
-  rnf (FrozenFull _ _ a)   = rnf a
-  rnf (FrozenNode _ _ _ a) = rnf a
-  rnf (FrozenTip _ v)      = rnf v
+instance NFData a => NFData (Node a) where
+  rnf (Full _ _ a)   = rnf a
+  rnf (Node _ _ _ a) = rnf a
+  rnf (Tip _ v)      = rnf v
 
 instance NFData a => NFData (WordMap a) where
-  rnf (FrozenWordMap _ _ mv as) = rnf mv `seq` rnf as
+  rnf (WordMap _ _ mv as) = rnf mv `seq` rnf as
 
 instance AsEmpty (WordMap a) where
   _Empty = prism (const empty) $ \s -> case s of
-    FrozenWordMap _ 0 Nothing _ -> Right ()
+    WordMap _ 0 Nothing _ -> Right ()
     t -> Left t
 
 instance AsEmpty (TWordMap s a) where
   _Empty = prism (const emptyM) $ \s -> case s of
-    WordMap _ 0 Nothing _ -> Right ()
+    TWordMap _ 0 Nothing _ -> Right ()
     t -> Left t
 
 instance FunctorWithIndex Word64 WordMap where
-  imap f (FrozenWordMap k n mv as) = FrozenWordMap k n (fmap (f k) mv) (fmap (imap f) as)
+  imap f (WordMap k n mv as) = WordMap k n (fmap (f k) mv) (fmap (imap f) as)
 
-instance FunctorWithIndex Word64 FrozenNode where
-  imap f (FrozenNode k n m as) = FrozenNode k n m (fmap (imap f) as)
-  imap f (FrozenTip k v)       = FrozenTip k (f k v)
-  imap f (FrozenFull k n as)   = FrozenFull k n (fmap (imap f) as)
+instance FunctorWithIndex Word64 Node where
+  imap f (Node k n m as) = Node k n m (fmap (imap f) as)
+  imap f (Tip k v)       = Tip k (f k v)
+  imap f (Full k n as)   = Full k n (fmap (imap f) as)
 
 instance Foldable WordMap where
-  fold wm      = foldMap fold (canonical wm)
+  fold wm = foldMap fold (canonical wm)
   foldMap f wm = foldMap (foldMap f) (canonical wm)
-  null (FrozenWordMap _ 0 Nothing _) = True
-  null _                       = False
+  null (WordMap _ 0 Nothing _) = True
+  null _ = False
 
 instance FoldableWithIndex Word64 WordMap where
   ifoldMap f wm = foldMap (ifoldMap f) (canonical wm)
 
-instance FoldableWithIndex Word64 FrozenNode where
-  ifoldMap f (FrozenNode _ _ _ as) = foldMap (ifoldMap f) as
-  ifoldMap f (FrozenTip k v) = f k v
-  ifoldMap f (FrozenFull _ _ as) = foldMap (ifoldMap f) as
+instance FoldableWithIndex Word64 Node where
+  ifoldMap f (Node _ _ _ as) = foldMap (ifoldMap f) as
+  ifoldMap f (Tip k v) = f k v
+  ifoldMap f (Full _ _ as) = foldMap (ifoldMap f) as
 
 instance Eq v => Eq (WordMap v) where
   as == bs = Exts.toList as == Exts.toList bs
@@ -555,3 +548,4 @@ instance Ord v => Ord (WordMap v) where
   compare as bs = compare (Exts.toList as) (Exts.toList bs)
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
+-- TODO: instance Eq (TWordMap s)
