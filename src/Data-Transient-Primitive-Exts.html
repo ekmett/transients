@@ -407,19 +407,41 @@
 <a name="line-398"></a>        <span class='hs-layout'>)</span>
 <a name="line-399"></a>      <span class='hs-keyglyph'>|</span> <span class='hs-varid'>otherwise</span> <span class='hs-keyglyph'>=</span> <span class='hs-conid'>Left</span> <span class='hs-varid'>empty</span>
 <a name="line-400"></a>
-<a name="line-401"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
-<a name="line-402"></a><span class='hs-comment'>-- * Missing MutableArray instances</span>
-<a name="line-403"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
-<a name="line-404"></a>
-<a name="line-405"></a><a name="instance%20Eq%20(MutableArray%20s%20a)"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>Eq</span> <span class='hs-layout'>(</span><span class='hs-conid'>MutableArray</span> <span class='hs-varid'>s</span> <span class='hs-varid'>a</span><span class='hs-layout'>)</span> <span class='hs-keyword'>where</span>
-<a name="line-406"></a>  <span class='hs-layout'>(</span><span class='hs-varop'>==</span><span class='hs-layout'>)</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sameMutableArray</span>
-<a name="line-407"></a>
-<a name="line-408"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
-<a name="line-409"></a><span class='hs-comment'>-- * Missing MutableByteArray instances</span>
-<a name="line-410"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
-<a name="line-411"></a>
-<a name="line-412"></a><a name="instance%20Eq%20(MutableByteArray%20s)"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>Eq</span> <span class='hs-layout'>(</span><span class='hs-conid'>MutableByteArray</span> <span class='hs-varid'>s</span><span class='hs-layout'>)</span> <span class='hs-keyword'>where</span>
-<a name="line-413"></a>  <span class='hs-layout'>(</span><span class='hs-varop'>==</span><span class='hs-layout'>)</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sameMutableByteArray</span>
-<a name="line-414"></a>
+<a name="line-401"></a>
+<a name="line-402"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-403"></a><span class='hs-comment'>-- * Missing MutableArray instances</span>
+<a name="line-404"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-405"></a>
+<a name="line-406"></a><a name="instance%20Eq%20(MutableArray%20s%20a)"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>Eq</span> <span class='hs-layout'>(</span><span class='hs-conid'>MutableArray</span> <span class='hs-varid'>s</span> <span class='hs-varid'>a</span><span class='hs-layout'>)</span> <span class='hs-keyword'>where</span>
+<a name="line-407"></a>  <span class='hs-layout'>(</span><span class='hs-varop'>==</span><span class='hs-layout'>)</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sameMutableArray</span>
+<a name="line-408"></a>
+<a name="line-409"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-410"></a><span class='hs-comment'>-- * Missing ByteArray instances</span>
+<a name="line-411"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-412"></a>
+<a name="line-413"></a><a name="instance%20Monoid%20ByteArray"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>Monoid</span> <span class='hs-conid'>ByteArray</span> <span class='hs-keyword'>where</span>
+<a name="line-414"></a>  <span class='hs-varid'>mempty</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>runST</span> <span class='hs-varop'>$</span> <span class='hs-varid'>newByteArray</span> <span class='hs-num'>0</span> <span class='hs-varop'>&gt;&gt;=</span> <span class='hs-varid'>unsafeFreezeByteArray</span>
+<a name="line-415"></a>  <span class='hs-comment'>{-# NOINLINE mempty #-}</span>
+<a name="line-416"></a>  <span class='hs-varid'>mappend</span> <span class='hs-varid'>m</span> <span class='hs-varid'>n</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>runST</span> <span class='hs-varop'>$</span> <span class='hs-keyword'>do</span>
+<a name="line-417"></a>    <span class='hs-varid'>o</span> <span class='hs-keyglyph'>&lt;-</span> <span class='hs-varid'>newByteArray</span> <span class='hs-layout'>(</span><span class='hs-varid'>lm</span> <span class='hs-varop'>+</span> <span class='hs-varid'>ln</span><span class='hs-layout'>)</span>
+<a name="line-418"></a>    <span class='hs-varid'>copyByteArray</span> <span class='hs-varid'>o</span> <span class='hs-num'>0</span> <span class='hs-varid'>m</span> <span class='hs-num'>0</span> <span class='hs-varid'>lm</span>
+<a name="line-419"></a>    <span class='hs-varid'>copyByteArray</span> <span class='hs-varid'>o</span> <span class='hs-varid'>lm</span> <span class='hs-varid'>n</span> <span class='hs-num'>0</span> <span class='hs-varid'>ln</span>
+<a name="line-420"></a>    <span class='hs-varid'>unsafeFreezeByteArray</span> <span class='hs-varid'>o</span>
+<a name="line-421"></a>    <span class='hs-keyword'>where</span> <span class='hs-varid'>lm</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sizeOfByteArray</span> <span class='hs-varid'>m</span>
+<a name="line-422"></a>          <span class='hs-varid'>ln</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sizeOfByteArray</span> <span class='hs-varid'>n</span>
+<a name="line-423"></a>  <span class='hs-comment'>{-# INLINE mappend #-}</span>
+<a name="line-424"></a>
+<a name="line-425"></a><span class='hs-comment'>-- * lens</span>
+<a name="line-426"></a>
+<a name="line-427"></a><a name="instance%20AsEmpty%20ByteArray"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>AsEmpty</span> <span class='hs-conid'>ByteArray</span> <span class='hs-keyword'>where</span>
+<a name="line-428"></a>  <span class='hs-sel'>_Empty</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>nearly</span> <span class='hs-varid'>mempty</span> <span class='hs-varop'>$</span> <span class='hs-keyglyph'>\</span><span class='hs-varid'>s</span> <span class='hs-keyglyph'>-&gt;</span> <span class='hs-varid'>sizeOfByteArray</span> <span class='hs-varid'>s</span> <span class='hs-varop'>==</span> <span class='hs-num'>0</span>
+<a name="line-429"></a>
+<a name="line-430"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-431"></a><span class='hs-comment'>-- * Missing MutableByteArray instances</span>
+<a name="line-432"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
+<a name="line-433"></a>
+<a name="line-434"></a><a name="instance%20Eq%20(MutableByteArray%20s)"></a><span class='hs-keyword'>instance</span> <span class='hs-conid'>Eq</span> <span class='hs-layout'>(</span><span class='hs-conid'>MutableByteArray</span> <span class='hs-varid'>s</span><span class='hs-layout'>)</span> <span class='hs-keyword'>where</span>
+<a name="line-435"></a>  <span class='hs-layout'>(</span><span class='hs-varop'>==</span><span class='hs-layout'>)</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>sameMutableByteArray</span>
+<a name="line-436"></a>
 </pre></body>
 </html>
