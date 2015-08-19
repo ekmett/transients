@@ -482,9 +482,26 @@ instance NFData v => NFData (WordMap v) where
       node (Node _ _ _ as) = array as (sizeOfSmallMutableArray as - 1)
       node (Full _ _ as) = array as 16
       node (Tip _ v) = rnf v `seq` return ()
+
+instance IsList (WordMap v) where
+  type Item (WordMap v) = (Word64, v)
+
+{-
+  toList = ifoldr (\i a r -> (i, a): r) []
+  {-# INLINE toList #-}
+-}
+
+  fromList xs = runST $ do
+     o <- foldM (\r (k,v) -> insertM k v r) emptyM xs
+     unsafeFreeze o
+  {-# INLINE fromList #-}
+
+  fromListN _ = fromList
+  {-# INLINE fromListN #-}
+
+-- stuff to eventually clean up and reintroduce
       
 {-
-
 
 type instance Index (WordMap a) = Key
 type instance IxValue (WordMap a) = a
@@ -512,10 +529,6 @@ instance AsEmpty (WordMap a) where
   _Empty = prism (const empty) $ \s -> case s of
     WordMap (Path _ 0 _) Nothing -> Right ()
     t -> Left t
-
--}
-
-{-
 
 instance FunctorWithIndex Word64 WordMap where
   imap f (WordMap (Path k n as) mv) = WordMap (Path k n (fmap (imap f) as)) (fmap (f k) mv)
@@ -547,18 +560,3 @@ instance Ord v => Ord (WordMap v) where
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
 -}
 
-instance IsList (WordMap v) where
-  type Item (WordMap v) = (Word64, v)
-
-{-
-  toList = ifoldr (\i a r -> (i, a): r) []
-  {-# INLINE toList #-}
--}
-
-  fromList xs = runST $ do
-     o <- foldM (\r (k,v) -> insertM k v r) emptyM xs
-     unsafeFreeze o
-  {-# INLINE fromList #-}
-
-  fromListN _ = fromList
-  {-# INLINE fromListN #-}
