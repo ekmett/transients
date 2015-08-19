@@ -25,8 +25,6 @@ module Data.Transient.WordMap
   , delete
   , lookup
   , focus
-  , fromList
-  , Exts.toList
 
   -- * Transient API
   , TWordMap
@@ -37,6 +35,15 @@ module Data.Transient.WordMap
   , lookupM
   , focusM
 
+  -- * Conversion
+  , freeze
+  , thaw
+
+  -- * Enumeration
+  , fromList
+  , Exts.toList
+
+  -- * Misc.
   , Key
   ) where
 

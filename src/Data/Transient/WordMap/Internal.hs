@@ -73,7 +73,7 @@ index :: Word16 -> Word16 -> Int
 index m b = popCount (m .&. (b-1))
 {-# INLINE index #-}
 
--- | Note: @level (xor k ok)@ will return a negative shift, don't use it
+-- | Note: @level 0@ will return a negative shift, so don't use it
 level :: Key -> Int
 level okk = 60 - (countLeadingZeros okk .&. 0x7c)
 {-# INLINE level #-}
@@ -149,8 +149,8 @@ reallyUnsafeFreeze :: TWordMap s a -> WordMap a
 reallyUnsafeFreeze = unsafeCoerce
 {-# INLINE reallyUnsafeFreeze #-}
 
-unsafeFreeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
-unsafeFreeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
+freeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
+freeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
     go ns0
     return (reallyUnsafeFreeze r)
   where
@@ -427,7 +427,7 @@ focusHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
 modify :: (forall s. TWordMap s a -> ST s (TWordMap s b)) -> WordMap a -> WordMap b
 modify f wm = runST $ do
   mwm <- f (thaw wm)
-  unsafeFreeze mwm
+  freeze mwm
 {-# INLINE modify #-}
 
 focusM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
@@ -481,7 +481,7 @@ instance IsList (WordMap a) where
 
   fromList xs = runST $ do
      o <- foldM (\r (k,v) -> insertM k v r) emptyM xs
-     unsafeFreeze o
+     freeze o
   {-# INLINE fromList #-}
 
   fromListN _ = fromList
