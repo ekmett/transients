@@ -12,7 +12,8 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE UnboxedTuples #-}
-{-# OPTIONS_GHC -fno-warn-orphans -fno-warn-type-defaults -fobject-code #-}
+-- {-# OPTIONS_GHC -fobject-code -fno-full-laziness -fno-cse #-}
+
 --------------------------------------------------------------------------------
 -- |
 -- Copyright   : (c) Edward Kmett 2015
@@ -413,25 +414,15 @@ focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
 modify :: (forall s. TWordMap s v -> ST s (TWordMap s v)) -> WordMap v -> WordMap v
 modify f wm = runST $ do
   mwm <- f (thaw wm)
-  if unsafeCoerce ptrEq mwm wm
-    then return wm
-    else unsafeFreeze mwm -- freeze in a post-process
+  unsafeFreeze mwm
 {-# INLINE modify #-}
-
-reallyUnsafeModify :: (forall s. TWordMap s v -> ST s (TWordMap s v)) -> WordMap v -> WordMap v
-reallyUnsafeModify f wm = runST $ do
-  mwm <- f (thaw wm)
-  if unsafeCoerce ptrEq mwm wm
-    then return wm
-    else return $! reallyUnsafeFreeze mwm
-{-# INLINE reallyUnsafeModify #-}
 
 focusM :: PrimMonad m => Key -> TWordMap (PrimState m) v -> m (TWordMap (PrimState m) v)
 focusM = focusHint warm
 {-# INLINE focusM #-}
 
 focus :: Key -> WordMap v -> WordMap v 
-focus k = reallyUnsafeModify (focusHint cold k)
+focus k = modify (focusHint cold k)
 
 insertHint :: PrimMonad m => Hint (PrimState m) -> Key -> v -> TWordMap (PrimState m) v -> m (TWordMap (PrimState m) v)
 insertHint hint k v wm@(WordMap ok _ mv _)
@@ -446,7 +437,7 @@ insertM = insertHint warm
 {-# INLINE insertM #-}
 
 insert :: Key -> v -> WordMap v -> WordMap v
-insert k v = reallyUnsafeModify (insertHint cold k v)
+insert k v = modify (insertHint cold k v)
 {-# INLINE insert #-}
 
 deleteHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) v -> m (TWordMap (PrimState m) v)
@@ -460,7 +451,7 @@ deleteM = deleteHint warm
 {-# INLINE deleteM #-}
 
 delete :: Key -> WordMap v -> WordMap v
-delete k = reallyUnsafeModify (deleteHint cold k)
+delete k = modify (deleteHint cold k)
 {-# INLINE delete #-}
 
 --------------------------------------------------------------------------------
