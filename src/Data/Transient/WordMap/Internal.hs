@@ -645,6 +645,7 @@ instance Ixed (WordMap a) where
   ix k f wm = case lookup k wm of
     Nothing -> pure wm
     Just v  -> let c = focus k wm in f v <&> \v' -> c { fingerValue = Just v' }
+  {-# INLINE ix #-}
 
 instance NFData a => NFData (Node a) where
   rnf (Full _ _ a)   = rnf a
@@ -666,6 +667,7 @@ instance AsEmpty (TWordMap s a) where
 
 instance Eq (MWordMap s a) where
   MWordMap m == MWordMap n = m == n
+  {-# INLINE (==) #-}
 
 instance FunctorWithIndex Word64 WordMap where
   imap f (WordMap k n mv as) = WordMap k n (fmap (f k) mv) (fmap (imap f) as)
@@ -691,9 +693,11 @@ instance FoldableWithIndex Word64 Node where
 
 instance Eq v => Eq (WordMap v) where
   as == bs = Exts.toList as == Exts.toList bs
+  {-# INLINE (==) #-}
 
 instance Ord v => Ord (WordMap v) where
   compare as bs = compare (Exts.toList as) (Exts.toList bs)
+  {-# INLINE compare #-}
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
 
