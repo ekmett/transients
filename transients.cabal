@@ -40,6 +40,10 @@ flag benchmark-wordmap
   default: True
   manual: True
 
+flag opt
+  default: True
+  manual: True
+
 library
   build-depends:
     base >= 4.8 && < 5,
@@ -56,7 +60,11 @@ library
     Data.Transient.Vector
     Data.Transient.WordMap
 
-  ghc-options: -Wall -fwarn-tabs -O2
+  ghc-options: -Wall -fwarn-tabs
+
+  if flag(opt)
+    ghc-options: -O2
+
   hs-source-dirs: src
   default-language: Haskell2010
 
@@ -96,7 +104,11 @@ test-suite hlint
 benchmark wordmap
   type:             exitcode-stdio-1.0
   main-is:          wordmap.hs
-  ghc-options:      -Wall -O2
+  ghc-options:      -Wall
+
+  if flag(opt)
+    ghc-options: -O2
+
   hs-source-dirs:   benchmarks benchmarks/wordmap
   default-language: Haskell2010
   if !flag(benchmark-wordmap)
