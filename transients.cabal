@@ -59,6 +59,7 @@ library
     Data.Transient.Primitive.Unsafe
     Data.Transient.Vector
     Data.Transient.WordMap
+    Data.Transient.WordMap.Internal
 
   ghc-options: -Wall -fwarn-tabs
 
