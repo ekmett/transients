@@ -99,15 +99,6 @@ apogee :: Key -> Key -> Mask
 apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 
 --------------------------------------------------------------------------------
--- * TNodes
---------------------------------------------------------------------------------
-
-data TNode s a
-  = TFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (TNode s a))
-  | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
-  | TTip  {-# UNPACK #-} !Key a
-
---------------------------------------------------------------------------------
 -- * WordMaps
 --------------------------------------------------------------------------------
 
@@ -124,6 +115,19 @@ data WordMap a = WordMap
   , fingerPath  :: {-# UNPACK #-} !(SmallArray (Node a))
   } deriving (Functor,Show)
 
+data TNode s a
+  = TFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (TNode s a))
+  | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
+  | TTip  {-# UNPACK #-} !Key a
+
+-- | This is a transient WordMap.
+data TWordMap s a = TWordMap
+  { transientFingerKey  :: {-# UNPACK #-} !Key
+  , transientFingerMask :: {-# UNPACK #-} !Mask
+  , transientFingerValue :: !(Maybe a)
+  , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
+  }
+
 frozen :: (forall s. TWordMap s a) -> WordMap a
 frozen = unsafeCoerce
 
@@ -135,21 +139,13 @@ thaw = unsafeCoerce
 reallyUnsafeFreezeTNode :: TNode s a -> Node a
 reallyUnsafeFreezeTNode = unsafeCoerce
 
--- | This is a transient WordMap.
-data TWordMap s a = TWordMap
-  { transientFingerKey  :: {-# UNPACK #-} !Key
-  , transientFingerMask :: {-# UNPACK #-} !Mask
-  , transientFingerValue :: !(Maybe a)
-  , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
-  }
+reallyUnsafeFreeze :: TWordMap s a -> WordMap a
+reallyUnsafeFreeze = unsafeCoerce
+{-# INLINE reallyUnsafeFreeze #-}
 
 --------------------------------------------------------------------------------
 -- * Transient WordMaps
 --------------------------------------------------------------------------------
-
-reallyUnsafeFreeze :: TWordMap s a -> WordMap a
-reallyUnsafeFreeze = unsafeCoerce
-{-# INLINE reallyUnsafeFreeze #-}
 
 -- | O(1) amortized conversion from a mutable structure to an immutable one
 freeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
@@ -375,10 +371,14 @@ replugPath hint k i t Nothing ns  = primToPrim $ unplugPath hint k i t ns
 unI# :: Int -> Int#
 unI# (I# i) = i
 
--- | enable us to gc the stuff that is on the path to the finger, normally we only do this lazily as the finger moves.
-trim :: PrimMonad m => TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
-trim wm@(TWordMap _ 0 _ _)    = return wm
-trim wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>= \case
+-- | O(1) This function enables us to GC the items that lie on the path to the finger.
+--
+-- Normally we only do this lazily as the finger moves out of a given area, but if you have
+-- particularly burdensome items for the garbage collector it may be worth paying this price
+-- to explicitly allow them to go free.
+trimM :: PrimMonad m => TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+trimM wm@(TWordMap _ 0 _ _)    = return wm
+trimM wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>= \case
     True -> go k0 ns ns (n-1) wm0
     False -> do
       ns' <- newSmallArray n undefined
@@ -394,7 +394,14 @@ trim wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>
         go k dst src (i - 1) wm
       | otherwise = return wm
 
--- do we want to make this eagerly scrub the parent pointers?
+-- | O(1) This function enables us to GC the items that lie on the path to the finger.
+--
+-- Normally we only do this lazily as the finger moves out of a given area, but if you
+-- have particularly burdensome items for the garbage collector it may be worth paying this price.
+-- to explicitly allow them to go free.
+trim :: WordMap a -> WordMap a
+trim = modify trimM
+
 focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
@@ -444,6 +451,9 @@ focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
       | k == ok = case newSmallArray# h# undefined s of (# s', ms #) -> (# s', ms, int2Word# 0#, Just v #)
       | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced TTip]
 
+-- | Modify an immutable structure with mutable operations.
+--
+-- @modify f wm@ passed @f@ a "frozen" transient that may be reused.
 modify :: (forall s. TWordMap s a -> ST s (TWordMap s b)) -> WordMap a -> WordMap b
 modify f wm = runST $ do
   mwm <- f (thaw wm)
@@ -452,15 +462,23 @@ modify f wm = runST $ do
 
 {-# RULES "freeze/thaw" forall m. freeze (unsafeCoerce m) = return m #-}
 
--- | This does _not_ destroy the transient, although, it does mean subsequent actions need to copy-on-write from scratch
+-- | Query a mutable structure with queries designed for an immutable structure.
+--
+-- This does _not_ destroy the transient, although, it does mean subsequent actions need to copy-on-write from scratch.
+--
+-- After @query f wm@, @wm@ is considered frozen and may be reused.
 query :: PrimMonad m => (WordMap a -> r) -> TWordMap (PrimState m) a -> m r
 query f t = f <$> freeze t
 {-# INLINE query #-}
 
+-- | This changes the location of the focus in a mutable map. Operations near the focus are considerably cheaper.
+--
+-- @focusM k wm@ invalidates any unfrozen transient @wm@ it is passed
 focusM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusM = focusWithHint warm
 {-# INLINE focusM #-}
 
+-- | This changes the location of the focus in an immutable map. Operations near the focus are considerably cheaper.
 focus :: Key -> WordMap a -> WordMap a
 focus k wm = modify (focusWithHint cold k) wm
 {-# INLINE focus #-}
@@ -473,10 +491,14 @@ insertWithHint hint k v wm@(TWordMap ok _ mv _)
     return $! wm' { transientFingerValue = Just v }
 {-# INLINE insertWithHint #-}
 
+-- | O(log n) mutable insert.
+-- 
+-- @insertM k v wm@ invalidates any unfrozen transient @wm@ it is passed
 insertM :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 insertM k v wm = insertWithHint warm k v wm
 {-# INLINE insertM #-}
 
+-- | O(log n) immutable insert.
 insert :: Key -> a -> WordMap a -> WordMap a
 insert k v wm = modify (insertWithHint cold k v) wm
 {-# INLINE insert #-}
@@ -489,10 +511,12 @@ deleteWithHint hint k wm = do
     _       -> return $! wm' { transientFingerValue = Nothing }
 {-# INLINE deleteWithHint #-}
 
+-- | O(log n) mutable delete. @deleteM k v wm@ invalidates any unfrozen transient it is passed.
 deleteM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 deleteM k wm = deleteWithHint warm k wm
 {-# INLINE deleteM #-}
 
+-- | O(log n) immutable delete.
 delete :: Key -> WordMap a -> WordMap a
 delete k wm = modify (deleteWithHint cold k) wm
 {-# INLINE delete #-}

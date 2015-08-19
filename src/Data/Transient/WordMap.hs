@@ -14,6 +14,7 @@
 -- This structure secretly maintains a finger to the previous mutation to
 -- speed access and repeated operations.
 --
+-- In addition, we support transient access patterns.
 --------------------------------------------------------------------------------
 module Data.Transient.WordMap
   ( 
@@ -25,6 +26,7 @@ module Data.Transient.WordMap
   , delete
   , lookup
   , focus
+  , trim
 
   -- * Transient API
   , TWordMap
@@ -34,6 +36,7 @@ module Data.Transient.WordMap
   , deleteM
   , lookupM
   , focusM
+  , trimM
 
   -- * Conversion
   , freeze
@@ -47,7 +50,6 @@ module Data.Transient.WordMap
 
   -- * Misc.
   , Key
-  , trim
   ) where
 
 import Data.Transient.WordMap.Internal
