@@ -1,17 +1,17 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE Unsafe #-}
 {-# LANGUAGE MagicHash #-}
-{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE UnboxedTuples #-}
 -- {-# OPTIONS_GHC -fobject-code -fno-full-laziness -fno-cse #-}
 {-# OPTIONS_GHC -ddump-simpl -dsuppress-all #-}
 {-# OPTIONS_HADDOCK not-home #-}
@@ -283,7 +283,7 @@ queryM :: PrimMonad m => (WordMap a -> r) -> MWordMap (PrimState m) a -> m r
 queryM f (MWordMap m) = do
   t <- readMutVar m 
   query f t
-
+{-# INLINE queryM #-}
 
 --------------------------------------------------------------------------------
 -- * Construction
@@ -464,6 +464,7 @@ trimT wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >
 -- to explicitly allow them to go free.
 trimM :: PrimMonad m => MWordMap (PrimState m) a -> m ()
 trimM = modifyM trimT
+{-# INLINE trimM #-}
 
 -- | O(1) This function enables us to GC the items that lie on the path to the finger.
 --
@@ -472,6 +473,7 @@ trimM = modifyM trimT
 -- to explicitly allow them to go free.
 trim :: WordMap a -> WordMap a
 trim = modify trimT
+{-# INLINE trim #-}
 
 focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
@@ -532,6 +534,7 @@ focusT = focusWithHint warm
 -- | This changes the location of the focus in a mutable map. Operations near the focus are considerably cheaper.
 focusM :: PrimMonad m => Key -> MWordMap (PrimState m) a -> m ()
 focusM k = modifyM (focusT k)
+{-# INLINE focusM #-}
 
 -- | This changes the location of the focus in an immutable map. Operations near the focus are considerably cheaper.
 focus :: Key -> WordMap a -> WordMap a
@@ -556,6 +559,7 @@ insertT k v wm = insertWithHint warm k v wm
 -- | Mutable insert.
 insertM :: PrimMonad m => Key -> a -> MWordMap (PrimState m) a -> m ()
 insertM k v mwm = modifyM (insertT k v) mwm
+{-# INLINE insertM #-}
 
 -- | Immutable insert.
 insert :: Key -> a -> WordMap a -> WordMap a
