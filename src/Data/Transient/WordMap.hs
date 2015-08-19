@@ -19,9 +19,24 @@
 --------------------------------------------------------------------------------
 module Data.Transient.WordMap
   (
-  -- * Persistent API
+  -- * Persistent
     WordMap
-  -- ** Combinators
+
+  -- * Transient
+  , TWordMap
+  , transient
+  , persistent
+  , modify
+  , query
+
+  -- * Mutable
+  , MWordMap
+  , thaw
+  , freeze
+  , modifyM
+  , queryM
+
+  -- * Persistent Combinators
   , singleton
   , empty
   , insert
@@ -32,13 +47,7 @@ module Data.Transient.WordMap
   , fromList
   , Exts.toList
 
-  -- * Transient API
-  , TWordMap
-  , transient
-  , persistent
-  , modify
-  , query
-  -- ** Combinators
+  -- * Transient Combinators
   , singletonT
   , emptyT
   , insertT
@@ -49,13 +58,7 @@ module Data.Transient.WordMap
   , fromListT
   , toListT
 
-  -- * Mutable API
-  , MWordMap
-  , thaw
-  , freeze
-  , modifyM
-  , queryM
-  -- ** Combinators
+  -- * Mutable Combinators
   , singletonM
   , emptyM
   , insertM
@@ -66,8 +69,6 @@ module Data.Transient.WordMap
   , fromListM
   , toListM
 
-  -- * Misc.
-  , Key
   ) where
 
 import Data.Transient.WordMap.Internal

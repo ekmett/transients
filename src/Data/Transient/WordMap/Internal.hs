@@ -54,7 +54,6 @@ import GHC.ST
 import GHC.Word
 import Unsafe.Coerce
 
-type Key = Word64
 type Mask = Word16
 type Offset = Int
 
@@ -75,15 +74,15 @@ index m b = popCount (m .&. (b-1))
 {-# INLINE index #-}
 
 -- | Note: @level 0@ will return a negative shift, so don't use it
-level :: Key -> Int
+level :: Word64 -> Int
 level okk = 60 - (countLeadingZeros okk .&. 0x7c)
 {-# INLINE level #-}
 
-maskBit :: Key -> Offset -> Int
+maskBit :: Word64 -> Offset -> Int
 maskBit k o = fromIntegral (unsafeShiftR k o .&. 0xf)
 {-# INLINE maskBit #-}
 
-mask :: Key -> Offset -> Word16
+mask :: Word64 -> Offset -> Word16
 mask k o = unsafeShiftL 1 (maskBit k o)
 {-# INLINE mask #-}
 
@@ -93,10 +92,10 @@ mask k o = unsafeShiftL 1 (maskBit k o)
 -- apogeeBit k ok = unsafeShiftR (level (xor k ok)) 2
 -- level (xor k ok) = unsafeShiftL (apogeeBit k ok) 2
 -- @
-apogeeBit :: Key -> Key -> Int
+apogeeBit :: Word64 -> Word64 -> Int
 apogeeBit k ok = 15 - unsafeShiftR (countLeadingZeros (xor k ok)) 2
 
-apogee :: Key -> Key -> Mask
+apogee :: Word64 -> Word64 -> Mask
 apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 
 --------------------------------------------------------------------------------
@@ -104,26 +103,26 @@ apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 --------------------------------------------------------------------------------
 
 data Node a
-  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallArray (Node a))
-  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (Node a))
-  | Tip  {-# UNPACK #-} !Key a
+  = Full {-# UNPACK #-} !Word64 {-# UNPACK #-} !Offset !(SmallArray (Node a))
+  | Node {-# UNPACK #-} !Word64 {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallArray (Node a))
+  | Tip  {-# UNPACK #-} !Word64 a
   deriving (Functor,Foldable,Show)
 
 data WordMap a = WordMap
-  { fingerKey   :: {-# UNPACK #-} !Key
+  { fingerKey   :: {-# UNPACK #-} !Word64
   , fingerMask  :: {-# UNPACK #-} !Mask
   , fingerValue :: !(Maybe a)
   , fingerPath  :: {-# UNPACK #-} !(SmallArray (Node a))
   } deriving (Functor,Show)
 
 data TNode s a
-  = TFull {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (TNode s a))
-  | TNode {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
-  | TTip  {-# UNPACK #-} !Key a
+  = TFull {-# UNPACK #-} !Word64 {-# UNPACK #-} !Offset !(SmallMutableArray s (TNode s a))
+  | TNode {-# UNPACK #-} !Word64 {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (TNode s a))
+  | TTip  {-# UNPACK #-} !Word64 a
 
 -- | This is a transient WordMap with a clojure-like API
 data TWordMap s a = TWordMap
-  { transientFingerKey  :: {-# UNPACK #-} !Key
+  { transientFingerKey  :: {-# UNPACK #-} !Word64
   , transientFingerMask :: {-# UNPACK #-} !Mask
   , transientFingerValue :: !(Maybe a)
   , transientFingerPath :: {-# UNPACK #-} !(SmallMutableArray s (TNode s a))
@@ -198,28 +197,28 @@ emptyM = thaw empty
 {-# INLINE emptyM #-}
 
 -- | Build a singleton WordMap
-singleton :: Key -> a -> WordMap a
+singleton :: Word64 -> a -> WordMap a
 singleton k v = WordMap k 0 (Just v) mempty
 {-# INLINE singleton #-}
 
-singletonT :: Key -> a -> TWordMap s a
+singletonT :: Word64 -> a -> TWordMap s a
 singletonT k v = TWordMap k 0 (Just v) emptySmallMutableArray
 {-# INLINE singletonT #-}
 
-singletonM :: PrimMonad m => Key -> a -> m (MWordMap (PrimState m) a)
+singletonM :: PrimMonad m => Word64 -> a -> m (MWordMap (PrimState m) a)
 singletonM k v = thaw (singleton k v)
 
-lookup :: Key -> WordMap a -> Maybe a
+lookup :: Word64 -> WordMap a -> Maybe a
 lookup k m = runST (lookupT k (transient m))
 {-# INLINEABLE lookup #-}
 
-lookupM :: PrimMonad m => Key -> MWordMap (PrimState m) a -> m (Maybe a)
+lookupM :: PrimMonad m => Word64 -> MWordMap (PrimState m) a -> m (Maybe a)
 lookupM k0 (MWordMap m) = do
   x <- readMutVar m
   lookupT k0 x
 {-# INLINE lookupM #-}
 
-lookupT :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (Maybe a)
+lookupT :: PrimMonad m => Word64 -> TWordMap (PrimState m) a -> m (Maybe a)
 lookupT k0 (TWordMap ok m mv mns)
   | k0 == ok = return mv
   | b <- apogee k0 ok = if
@@ -229,7 +228,7 @@ lookupT k0 (TWordMap ok m mv mns)
       primToPrim (lookupTNode k0 x)
 {-# INLINEABLE lookupT #-}
 
-lookupTNode :: Key -> TNode s a -> ST s (Maybe a)
+lookupTNode :: Word64 -> TNode s a -> ST s (Maybe a)
 lookupTNode !k (TFull ok o a)
   | z > 0xf   = return Nothing
   | otherwise = do
@@ -329,12 +328,12 @@ deleteSmallArray hint i k = do
   return o
 {-# INLINEABLE deleteSmallArray #-}
 
-node :: Key -> Offset -> Mask -> SmallMutableArray s (TNode s a) -> TNode s a
+node :: Word64 -> Offset -> Mask -> SmallMutableArray s (TNode s a) -> TNode s a
 node k o 0xffff a = TFull k o a
 node k o m a      = TNode k o m a
 {-# INLINE node #-}
 
-fork :: Hint s -> Key -> TNode s a -> Key -> TNode s a -> ST s (TNode s a)
+fork :: Hint s -> Word64 -> TNode s a -> Word64 -> TNode s a -> ST s (TNode s a)
 fork hint k n ok on = do
   arr <- newSmallArray 2 n
   writeSmallArray arr (fromEnum (k < ok)) on
@@ -343,7 +342,7 @@ fork hint k n ok on = do
   return $! TNode (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) arr
 
 -- O(1) remove the _entire_ branch containing a given node from this tree, in situ
-unplug :: Hint s -> Key -> TNode s a -> ST s (TNode s a)
+unplug :: Hint s -> Word64 -> TNode s a -> ST s (TNode s a)
 unplug hint k on@(TFull ok n as)
   | wd >= 0xf = return on
   | d <- fromIntegral wd = TNode ok n (complement (unsafeShiftL 1 d)) <$> deleteSmallArray hint as d
@@ -365,7 +364,7 @@ canonical wm = runST $ case transient wm of
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
-plug :: Hint s -> Key -> TNode s a -> TNode s a -> ST s (TNode s a)
+plug :: Hint s -> Word64 -> TNode s a -> TNode s a -> ST s (TNode s a)
 plug hint k z on@(TNode ok n m as)
   | wd > 0xf = fork hint k z ok on
   | otherwise = do
@@ -412,7 +411,7 @@ plug hint k z on@(TTip ok _) = fork hint k z ok on
 
 -- | Given @k@ located under @acc@, @plugPath k i t acc ns@ plugs acc recursively into each of the nodes
 -- of @ns@ from @[i..t-1]@ from the bottom up
-plugPath :: Hint s -> Key -> Int -> Int -> TNode s a -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
+plugPath :: Hint s -> Word64 -> Int -> Int -> TNode s a -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
 plugPath hint !k !i !t !acc !ns
   | i < t     = do
     x <- readSmallArray ns i
@@ -421,13 +420,13 @@ plugPath hint !k !i !t !acc !ns
   | otherwise = return acc
 
 -- this recurses into @plugPath@ deliberately.
-unplugPath :: Hint s -> Key -> Int -> Int -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
+unplugPath :: Hint s -> Word64 -> Int -> Int -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
 unplugPath hint k i t ns = do
   x <- readSmallArray ns i
   y <- unplug hint k x
   plugPath hint k (i+1) t y ns
 
-replugPath :: PrimMonad m => Hint (PrimState m) -> Key -> Int -> Int -> Maybe v -> SmallMutableArray (PrimState m) (TNode (PrimState m) v) -> m (TNode (PrimState m) v)
+replugPath :: PrimMonad m => Hint (PrimState m) -> Word64 -> Int -> Int -> Maybe v -> SmallMutableArray (PrimState m) (TNode (PrimState m) v) -> m (TNode (PrimState m) v)
 replugPath hint k i t (Just v) ns = primToPrim $ plugPath hint k i t (TTip k v) ns
 replugPath hint k i t Nothing ns  = primToPrim $ unplugPath hint k i t ns
 
@@ -448,7 +447,7 @@ trimT wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >
       go k0 ns' ns (n-1) (TWordMap k0 m mv ns')
   where
     n = sizeOfSmallMutableArray ns
-    go :: Key -> SmallMutableArray s (TNode s a) -> SmallMutableArray s (TNode s a) -> Int -> TWordMap s a -> ST s (TWordMap s a)
+    go :: Word64 -> SmallMutableArray s (TNode s a) -> SmallMutableArray s (TNode s a) -> Int -> TWordMap s a -> ST s (TWordMap s a)
     go k dst src i wm
       | i >= 0 = do
         x <- readSmallArray src i
@@ -475,7 +474,7 @@ trim :: WordMap a -> WordMap a
 trim = modify trimT
 {-# INLINE trim #-}
 
-focusWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+focusWithHint :: PrimMonad m => Hint (PrimState m) -> Word64 -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
   | m0 == 0 = case mv0 of
@@ -494,7 +493,7 @@ focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
         s'' -> case hint ms s'' of
           s''' -> (# s''', TWordMap k0 (kept .|. W16# m#) omv (SmallMutableArray ms) #)
   where
-    deep :: Key -> Int# -> SmallMutableArray# s (TNode s a) -> Int# -> TNode s a -> Int# -> State# s ->
+    deep :: Word64 -> Int# -> SmallMutableArray# s (TNode s a) -> Int# -> TNode s a -> Int# -> State# s ->
       (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
     deep k h# as d# on n# s = case readSmallArray# as d# s of
       (# s', on' #) -> case go k (h# +# 1#) on' s' of
@@ -508,7 +507,7 @@ focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
       (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
         W16# m# -> (# s', ms, m#, mv #)
 
-    go :: Key -> Int# -> TNode s a -> State# s -> (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
+    go :: Word64 -> Int# -> TNode s a -> State# s -> (# State# s, SmallMutableArray# s (TNode s a), Word#, Maybe a #)
     go k h# on@(TFull ok n@(I# n#) (SmallMutableArray as)) s
       | wd > 0xf  = shallow h# on (unI# (level okk)) Nothing s -- we're a sibling of what we recursed into  -- [Displaced TFull]
       | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                           -- Parent TFull : ..
@@ -527,21 +526,21 @@ focusWithHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
 -- | This changes the location of the focus in a transient map. Operations near the focus are considerably cheaper.
 --
 -- @focusT k wm@ invalidates any unpersisted transient @wm@ it is passed
-focusT :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+focusT :: PrimMonad m => Word64 -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusT = focusWithHint warm
 {-# INLINE focusT #-}
 
 -- | This changes the location of the focus in a mutable map. Operations near the focus are considerably cheaper.
-focusM :: PrimMonad m => Key -> MWordMap (PrimState m) a -> m ()
+focusM :: PrimMonad m => Word64 -> MWordMap (PrimState m) a -> m ()
 focusM k = modifyM (focusT k)
 {-# INLINE focusM #-}
 
 -- | This changes the location of the focus in an immutable map. Operations near the focus are considerably cheaper.
-focus :: Key -> WordMap a -> WordMap a
+focus :: Word64 -> WordMap a -> WordMap a
 focus k wm = modify (focusWithHint cold k) wm
 {-# INLINE focus #-}
 
-insertWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+insertWithHint :: PrimMonad m => Hint (PrimState m) -> Word64 -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 insertWithHint hint k v wm@(TWordMap ok _ mv _)
   | k == ok, Just ov <- mv, ptrEq v ov = return wm
   | otherwise = do
@@ -552,21 +551,21 @@ insertWithHint hint k v wm@(TWordMap ok _ mv _)
 -- | Transient insert.
 --
 -- @insertT k v wm@ invalidates any unpersisted transient @wm@ it is passed
-insertT :: PrimMonad m => Key -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+insertT :: PrimMonad m => Word64 -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 insertT k v wm = insertWithHint warm k v wm
 {-# INLINE insertT #-}
 
 -- | Mutable insert.
-insertM :: PrimMonad m => Key -> a -> MWordMap (PrimState m) a -> m ()
+insertM :: PrimMonad m => Word64 -> a -> MWordMap (PrimState m) a -> m ()
 insertM k v mwm = modifyM (insertT k v) mwm
 {-# INLINE insertM #-}
 
 -- | Immutable insert.
-insert :: Key -> a -> WordMap a -> WordMap a
+insert :: Word64 -> a -> WordMap a -> WordMap a
 insert k v wm = modify (insertWithHint cold k v) wm
 {-# INLINE insert #-}
 
-deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Word64 -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 deleteWithHint hint k wm = do
   wm' <- focusWithHint hint k wm
   case transientFingerValue wm' of
@@ -575,17 +574,17 @@ deleteWithHint hint k wm = do
 {-# INLINE deleteWithHint #-}
 
 -- | Transient delete. @deleteT k v wm@ invalidates any unpersisted transient it is passed.
-deleteT :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+deleteT :: PrimMonad m => Word64 -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 deleteT k wm = deleteWithHint warm k wm
 {-# INLINE deleteT #-}
 
 -- | Mutable delete.
-deleteM :: PrimMonad m => Key -> MWordMap (PrimState m) a -> m ()
+deleteM :: PrimMonad m => Word64 -> MWordMap (PrimState m) a -> m ()
 deleteM k wm = modifyM (deleteT k) wm
 {-# INLINE deleteM #-}
 
 -- | Immutable delete.
-delete :: Key -> WordMap a -> WordMap a
+delete :: Word64 -> WordMap a -> WordMap a
 delete k wm = modify (deleteWithHint cold k) wm
 {-# INLINE delete #-}
 
@@ -609,7 +608,7 @@ instance IsList (WordMap a) where
 
 -- stuff to eventually clean up and reintroduce
 
-type instance Index (WordMap a) = Key
+type instance Index (WordMap a) = Word64
 type instance IxValue (WordMap a) = a
 
 instance At (WordMap a) where
