@@ -18,7 +18,7 @@
 --------------------------------------------------------------------------------
 module Data.Transient.WordMap
   ( 
-  -- Persistent API
+  -- * Persistent API
     WordMap
   , singleton
   , empty
@@ -30,6 +30,18 @@ module Data.Transient.WordMap
 
   -- * Transient API
   , TWordMap
+  , singletonT
+  , emptyT
+  , insertT
+  , deleteT
+  , lookupT
+  , focusT
+  , trimT
+  , transient
+  , persistent
+
+  -- * Mutable API
+  , MWordMap
   , singletonM
   , emptyM
   , insertM
@@ -37,12 +49,14 @@ module Data.Transient.WordMap
   , lookupM
   , focusM
   , trimM
+  , thaw
+  , freeze
 
   -- * Conversion
-  , freeze
-  , thaw
   , modify
+  , modifyM
   , query
+  , queryM
 
   -- * Enumeration
   , fromList
