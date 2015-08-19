@@ -47,15 +47,14 @@ module Data.Transient.WordMap
 
 import Control.Applicative hiding (empty)
 import Control.DeepSeq
-import Control.Lens hiding (index, deep)
+-- import Control.Lens hiding (index, deep)
 import Control.Monad
 import Control.Monad.ST hiding (runST)
 import Control.Monad.Primitive
 import Data.Bits
-import Data.Foldable
-import Data.Monoid
-import Data.Primitive.MutVar
-import Data.Transient.Primitive.Exts
+-- import Data.Foldable
+-- import Data.Monoid
+-- import Data.Transient.Primitive.Exts
 import Data.Transient.Primitive.SmallArray
 import Data.Transient.Primitive.Unsafe
 import Data.Word
@@ -75,13 +74,11 @@ type Offset = Int
 --------------------------------------------------------------------------------
 
 ptrEq :: a -> a -> Bool
-ptrEq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts.==# 1#)
--- ptrEq _ _ = False
+ptrEq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y)
 {-# INLINEABLE ptrEq #-}
 
 ptrNeq :: a -> a -> Bool
-ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y Exts./=# 1#)
--- ptrNeq _ _ = True
+ptrNeq x y = isTrue# (Exts.reallyUnsafePtrEquality# x y `xorI#` 1#)
 {-# INLINEABLE ptrNeq #-}
 
 index :: Word16 -> Word16 -> Int
@@ -117,32 +114,32 @@ apogee k ok = unsafeShiftL 1 (apogeeBit k ok)
 -- * Nodes
 --------------------------------------------------------------------------------
 
-data Node s v 
-  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (Node s v))
-  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s v))
-  | Tip  {-# UNPACK #-} !Key v
+data Node s a 
+  = Full {-# UNPACK #-} !Key {-# UNPACK #-} !Offset !(SmallMutableArray s (Node s a))
+  | Node {-# UNPACK #-} !Key {-# UNPACK #-} !Offset {-# UNPACK #-} !Mask !(SmallMutableArray s (Node s a))
+  | Tip  {-# UNPACK #-} !Key a
 
 
 --------------------------------------------------------------------------------
 -- * WordMaps
 --------------------------------------------------------------------------------
 
-newtype WordMap v = Frozen { thaw :: forall s. TWordMap s v }
+newtype WordMap a = Frozen { thaw :: forall s. TWordMap s a }
 
 -- | This is a transient WordMap.
-data TWordMap s v = WordMap {-# UNPACK #-} !Key {-# UNPACK #-} !Mask !(Maybe v) {-# UNPACK #-} !(SmallMutableArray s (Node s v))
+data TWordMap s a = WordMap {-# UNPACK #-} !Key {-# UNPACK #-} !Mask !(Maybe a) {-# UNPACK #-} !(SmallMutableArray s (Node s a))
 
 --------------------------------------------------------------------------------
 -- * Transient WordMaps
 --------------------------------------------------------------------------------
 
-reallyUnsafeFreeze :: TWordMap s v -> WordMap v
+reallyUnsafeFreeze :: TWordMap s a -> WordMap a
 reallyUnsafeFreeze = unsafeCoerce
 {-# INLINE reallyUnsafeFreeze #-}
 
-unsafeFreeze :: PrimMonad m => TWordMap (PrimState m) v -> m (WordMap v)
-unsafeFreeze r@(WordMap _ _ _ ns) = primToPrim $ do
-    go ns 
+unsafeFreeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
+unsafeFreeze r@(WordMap _ _ _ ns0) = primToPrim $ do
+    go ns0 
     return (reallyUnsafeFreeze r)
   where
     go :: SmallMutableArray s (Node s a) -> ST s ()
@@ -157,7 +154,7 @@ unsafeFreeze r@(WordMap _ _ _ ns) = primToPrim $ do
         _              -> return ()
       | otherwise = return ()
 
-empty :: WordMap v
+empty :: WordMap a
 empty = Frozen emptyM
 {-# NOINLINE empty #-}
 
@@ -165,24 +162,24 @@ emptySmallMutableArray :: SmallMutableArray s a
 emptySmallMutableArray = runST $ unsafeCoerce <$> newSmallArray 0 undefined
 {-# NOINLINE emptySmallMutableArray #-}
 
-emptyM :: TWordMap s v
+emptyM :: TWordMap s a
 emptyM = WordMap 0 0 Nothing emptySmallMutableArray
 {-# INLINE emptyM #-}
 
 -- | Build a singleton Node
-singleton :: Key -> v -> WordMap v
+singleton :: Key -> a -> WordMap a
 singleton k v = Frozen (singletonM k v)
 {-# INLINE singleton #-}
 
-singletonM :: Key -> v -> TWordMap s v
+singletonM :: Key -> a -> TWordMap s a
 singletonM k v = WordMap k 0 (Just v) emptySmallMutableArray
 {-# INLINE singletonM #-}
 
-lookup :: Key -> WordMap v -> Maybe v
+lookup :: Key -> WordMap a -> Maybe a
 lookup k m = runST (lookupM k (thaw m))
 {-# INLINEABLE lookup #-}
 
-lookupM :: PrimMonad m => Key -> TWordMap (PrimState m) v -> m (Maybe v)
+lookupM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (Maybe a)
 lookupM k0 (WordMap ok m mv mns)
   | k0 == ok = return mv
   | b <- apogee k0 ok = if
@@ -379,7 +376,7 @@ focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
     primitive $ \s -> case go k0 nkept# root s of
       (# s', ms, m#, omv #) -> case copySmallMutableArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
         s'' -> case hint ms s'' of
-          s''' -> (# s'', WordMap k0 (kept .|. W16# m#) omv (SmallMutableArray ms) #)
+          s''' -> (# s''', WordMap k0 (kept .|. W16# m#) omv (SmallMutableArray ms) #)
   where
     deep :: Key -> Int# -> SmallMutableArray# s (Node s v) -> Int# -> Node s v -> Int# -> State# s ->
       (# State# s, SmallMutableArray# s (Node s v), Word#, Maybe v #)
@@ -411,7 +408,7 @@ focusHint hint k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
       | k == ok = case newSmallArray# h# undefined s of (# s', ms #) -> (# s', ms, int2Word# 0#, Just v #)
       | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced Tip]
 
-modify :: (forall s. TWordMap s v -> ST s (TWordMap s v)) -> WordMap v -> WordMap v
+modify :: (forall s. TWordMap s a -> ST s (TWordMap s b)) -> WordMap a -> WordMap b
 modify f wm = runST $ do
   mwm <- f (thaw wm)
   unsafeFreeze mwm
@@ -465,14 +462,14 @@ instance NFData v => NFData (WordMap v) where
       array ns i
         | i >= 0 = do
           x <- readSmallArray ns i
-          node x
+          step x
           array ns (i-1)
         | otherwise = return ()
 
-      node :: Node s v -> ST s ()
-      node (Node _ _ _ as) = array as (sizeOfSmallMutableArray as - 1)
-      node (Full _ _ as) = array as 16
-      node (Tip _ v) = rnf v `seq` return ()
+      step :: Node s v -> ST s ()
+      step (Node _ _ _ as) = array as (sizeOfSmallMutableArray as - 1)
+      step (Full _ _ as)   = array as 16
+      step (Tip _ v)       = rnf v `seq` return ()
 
 instance IsList (WordMap v) where
   type Item (WordMap v) = (Word64, v)
