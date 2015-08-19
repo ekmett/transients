@@ -127,6 +127,7 @@ data WordMap a = WordMap
 frozen :: (forall s. TWordMap s a) -> WordMap a
 frozen = unsafeCoerce
 
+-- | O(1) worst-case conversion from an immutable structure to a mutable one
 thaw :: WordMap a -> TWordMap s a
 thaw = unsafeCoerce
 
@@ -149,6 +150,7 @@ reallyUnsafeFreeze :: TWordMap s a -> WordMap a
 reallyUnsafeFreeze = unsafeCoerce
 {-# INLINE reallyUnsafeFreeze #-}
 
+-- | O(1) amortized conversion from a mutable structure to an immutable one
 freeze :: PrimMonad m => TWordMap (PrimState m) a -> m (WordMap a)
 freeze r@(TWordMap _ _ _ ns0) = primToPrim $ do
     go ns0
@@ -180,7 +182,7 @@ emptyM = TWordMap 0 0 Nothing emptySmallMutableArray
 
 -- | Build a singleton TNode
 singleton :: Key -> a -> WordMap a
-singleton k v = frozen (singletonM k v)
+singleton k v = WordMap k 0 (Just v) mempty
 {-# INLINE singleton #-}
 
 singletonM :: Key -> a -> TWordMap s a
@@ -198,27 +200,27 @@ lookupM k0 (TWordMap ok m mv mns)
     | m .&. b == 0 -> return Nothing
     | otherwise    -> do
       x <- readSmallArray mns (index m b)
-      primToPrim (lookupTNodeM k0 x)
+      primToPrim (lookupNodeM k0 x)
 {-# INLINEABLE lookupM #-}
 
-lookupTNodeM :: Key -> TNode s a -> ST s (Maybe a)
-lookupTNodeM !k (TFull ok o a)
+lookupNodeM :: Key -> TNode s a -> ST s (Maybe a)
+lookupNodeM !k (TFull ok o a)
   | z > 0xf   = return Nothing
   | otherwise = do
     x <- readSmallArray a (fromIntegral z)
-    lookupTNodeM k x
+    lookupNodeM k x
   where
     z = unsafeShiftR (xor k ok) o
-lookupTNodeM k (TNode ok o m a)
+lookupNodeM k (TNode ok o m a)
   | z > 0xf      = return Nothing
   | m .&. b == 0 = return Nothing
   | otherwise = do
     x <- readSmallArray a (index m b)
-    lookupTNodeM k x
+    lookupNodeM k x
   where
     z = unsafeShiftR (xor k ok) o
     b = unsafeShiftL 1 (fromIntegral z)
-lookupTNodeM k (TTip ok ov)
+lookupNodeM k (TTip ok ov)
   | k == ok   = return (Just ov)
   | otherwise = return (Nothing)
 
@@ -371,10 +373,26 @@ replugPath hint k i t Nothing ns  = primToPrim $ unplugPath hint k i t ns
 unI# :: Int -> Int#
 unI# (I# i) = i
 
--- create a 1-hole context at key k, destroying any previous contents of that position.
+-- | enable us to gc the stuff that is on the path to the finger, normally we only do this lazily as the finger moves.
+trim :: PrimMonad m => TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
+trim wm@(TWordMap _ 0 _ _)    = return wm
+trim wm0@(TWordMap k0 m mv ns) = primToPrim $ unsafeCheckSmallMutableArray ns >>= \case
+    True -> go k0 ns ns (n-1) wm0
+    False -> do
+      ns' <- newSmallArray n undefined
+      go k0 ns' ns (n-1) (TWordMap k0 m mv ns')
+  where
+    n = sizeOfSmallMutableArray ns
+    go :: Key -> SmallMutableArray s (TNode s a) -> SmallMutableArray s (TNode s a) -> Int -> TWordMap s a -> ST s (TWordMap s a)
+    go k dst src i wm
+      | i >= 0 = do
+        x <- readSmallArray src i
+        y <- unplug warm k x
+        writeSmallArray dst i y
+        go k dst src (i - 1) wm
+      | otherwise = return wm
 
--- do we want to make this eager at scrubbing the parent pointers?
-
+-- do we want to make this eagerly scrub the parent pointers?
 focusHint :: PrimMonad m => Hint (PrimState m) -> Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusHint hint k0 wm0@(TWordMap ok0 m0 mv0 ns0@(SmallMutableArray ns0#))
   | k0 == ok0 = return wm0 -- keys match, easy money
@@ -429,6 +447,10 @@ modify f wm = runST $ do
   mwm <- f (thaw wm)
   freeze mwm
 {-# INLINE modify #-}
+
+-- | This does _not_ destroy the transient, although, it does mean subsequent actions need to copy-on-write from scratch
+query :: PrimMonad m => (WordMap a -> r) -> TWordMap (PrimState m) a -> m r
+query f t = f <$> freeze t
 
 focusM :: PrimMonad m => Key -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 focusM = focusHint warm

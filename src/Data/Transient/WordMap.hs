@@ -38,6 +38,8 @@ module Data.Transient.WordMap
   -- * Conversion
   , freeze
   , thaw
+  , modify
+  , query
 
   -- * Enumeration
   , fromList
@@ -45,6 +47,7 @@ module Data.Transient.WordMap
 
   -- * Misc.
   , Key
+  , trim
   ) where
 
 import Data.Transient.WordMap.Internal
