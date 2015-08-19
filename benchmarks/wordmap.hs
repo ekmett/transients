@@ -1,18 +1,21 @@
 {-# OPTIONS_GHC -fno-warn-type-defaults -fno-full-laziness -fno-cse #-}
+
 module Main where
 
 import Control.DeepSeq
 import Control.Exception (evaluate)
+import Control.Monad
 import Criterion.Main
 import Criterion.Types
-import Data.Transient.WordMap as D
 import Data.Foldable
-import Data.Maybe (fromMaybe)
-import Data.Word
-import Prelude hiding (lookup, length, foldr)
 import qualified Data.IntMap as M
 import qualified Data.HashMap.Lazy as H
+import Data.Maybe (fromMaybe)
+import Data.Transient.WordMap as D
+import Data.Transient.WordMap.Internal as DI
+import Data.Word
 import GHC.Exts as E
+import Prelude hiding (lookup, length, foldr)
 
 main :: IO ()
 main = do
@@ -30,17 +33,20 @@ main = do
             [ bgroup "present"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 keys) denseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wkeys) denseW
+                , bench "WordMap0" $ whnf (\m -> foldl' (\n k -> fromMaybe n (DI.lookup0 k m)) 0 wkeys) denseW
                 , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wkeys) denseH
                 ]
             , bgroup "absent"
                 [ bench "IntMap"  $ whnf (\m -> foldl' (\n k -> fromMaybe n (M.lookup k m)) 0 sKeysSearch) sparseM
                 , bench "WordMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (D.lookup k m)) 0 wsKeysSearch) sparseW
+                , bench "WordMap0" $ whnf (\m -> foldl' (\n k -> fromMaybe n (DI.lookup0 k m)) 0 wsKeysSearch) sparseW
                 , bench "HashMap" $ whnf (\m -> foldl' (\n k -> fromMaybe n (H.lookup k m)) 0 wsKeysSearch) sparseH
                 ]
             ]
         , bgroup "insert"
             [ bgroup "present"
-                [ bench "IntMap"  $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 elems) denseM
+                [ bench "IntMap"   $ whnf (\m0 -> foldl' (\m (k, v) -> M.insert k v m) m0 elems) denseM
+                , bench "TWordMap" $ whnf (\m0 -> modify (\t0 -> foldM (\m (k, v) -> D.insertT k v m) t0 welems) m0) denseW
                 , bench "WordMap" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k v m) m0 welems) denseW
                 , bench "HashMap" $ whnf (\m0 -> foldl' (\m (k, v) -> H.insert k v m) m0 welems) denseH
                 , bench "WordMap+1" $ whnf (\m0 -> foldl' (\m (k, v) -> D.insert k (v+1) m) m0 welems) denseW
