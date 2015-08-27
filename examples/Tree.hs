@@ -60,8 +60,12 @@ reallyUnsafeFreeze = primToPrim . go where
     TBin a l r -> Bin a <$> unsafeInterleaveST (go l) <*> unsafeInterleaveST (go r)
     Frozen -> throwFrozenTransient
 
-query :: (Tree a -> r) -> TTree s a -> m r
-query f s = f <$> freeze s
+query :: PrimMonad m => (Tree a -> r) -> TTree (PrimState m) a -> m r
+query f s@(TTree t) = do
+  x <- unsafeFreeze s
+  r <- f x
+  writeMutVar t (Thaw x)
+  return r
 
 modify :: (forall s. TTree s a -> ST s ()) -> Tree a -> Tree a
 modify f s = runST $ do
