@@ -12,8 +12,6 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
--- {-# OPTIONS_GHC -fobject-code -fno-full-laziness -fno-cse #-}
-{-# OPTIONS_GHC -ddump-simpl -dsuppress-all #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 --------------------------------------------------------------------------------
