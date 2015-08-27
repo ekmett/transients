@@ -1,4 +1,4 @@
-#import "Cmm.h"
+#include "Cmm.h"
 
 /* checkMutableArray# :: MutableArray# s a -> State# s -> (# State s, Int# #) */
 checkMutableArrayzh(P_ ma) {
