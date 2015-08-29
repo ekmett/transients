@@ -342,15 +342,6 @@ insertSmallMutableArray hint i k a = do
   return o
 {-# INLINEABLE insertSmallMutableArray #-}
 
-insertSmallArray :: SmallArray a -> Int -> a -> SmallArray a
-insertSmallArray i k a = runST $ do
-  let n = sizeOfSmallArray i
-  o <- newSmallArray (n + 1) a
-  copySmallArray o 0 i 0 k -- backwards `primitive` convention
-  copySmallArray o (k+1) i k (n-k) -- backwards `primitive` convention
-  unsafeFreezeSmallArray o
-{-# INLINEABLE insertSmallArray #-}
-
 deleteSmallMutableArray :: Hint s -> SmallMutableArray s a -> Int -> ST s (SmallMutableArray s a)
 deleteSmallMutableArray hint i k = do
   let n = sizeOfSmallMutableArray i
@@ -360,20 +351,6 @@ deleteSmallMutableArray hint i k = do
   apply hint o
   return o
 {-# INLINEABLE deleteSmallMutableArray #-}
-
-deleteSmallArray :: SmallArray a -> Int -> SmallArray a
-deleteSmallArray i k = runST $ do
-  let n = sizeOfSmallArray i
-  o <- newSmallArray (n - 1) undefined
-  copySmallArray o 0 i 0 k -- backwards `primitive` convention
-  copySmallArray o k i (k+1) (n-k-1) -- backwards `primitive` convention
-  unsafeFreezeSmallArray o
-{-# INLINEABLE deleteSmallArray #-}
-
-node :: Word64 -> Offset -> Mask -> SmallArray (Node a) -> Node a
-node k o 0xffff a = Full k o a
-node k o m a      = Node k o m a
-{-# INLINE node #-}
 
 nodeT :: Word64 -> Offset -> Mask -> SmallMutableArray s (TNode s a) -> TNode s a
 nodeT k o 0xffff a = TFull k o a
@@ -387,28 +364,6 @@ forkT hint k n ok on = do
   let !o = level (xor k ok)
   apply hint arr
   return $! TNode (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) arr
-
-fork :: Word64 -> Node a -> Word64 -> Node a -> Node a
-fork k n ok on = runST $ do
-  arr <- newSmallArray 2 n
-  writeSmallArray arr (fromEnum (k < ok)) on
-  let !o = level (xor k ok)
-  Node (k .&. unsafeShiftL 0xfffffffffffffff0 o) o (mask k o .|. mask ok o) <$> unsafeFreezeSmallArray arr
-
-unplug :: Word64 -> Node a -> Node a
-unplug !k on@(Full ok n as)
-  | wd >= 0xf = on
-  | d <- fromIntegral wd = Node ok n (complement (unsafeShiftL 1 d)) (deleteSmallArray as d)
-  where !wd = unsafeShiftR (xor k ok) n
-unplug k on@(Node ok n m as)
-  | wd >= 0xf = on
-  | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0, p <- index m b =
-    if sizeOfSmallArray as == 2
-     then indexSmallArray as (1-p) -- keep the other node
-     else Node ok n (m .&. complement b) (deleteSmallArray as p)
-  | otherwise = on
-  where !wd = unsafeShiftR (xor k ok) n
-unplug _ on = on
 
 -- O(1) remove the _entire_ branch containing a given node from this tree, in situ
 unplugT :: Hint s -> Word64 -> TNode s a -> ST s (TNode s a)
@@ -430,39 +385,6 @@ canonical :: WordMap a -> Maybe (Node a)
 canonical wm = runST $ case transient wm of
   TWordMap _ 0 Nothing _ -> return Nothing
   TWordMap k _ mv ns -> Just . unsafePersistentTNode <$> replugPathT cold k 0 (sizeOfSmallMutableArray ns) mv ns
-
--- O(1) plug a child node directly into an open parent node
--- carefully retains identity in case we plug what is already there back in
-plug :: Word64 -> Node a -> Node a -> Node a
-plug k z on@(Node ok n m as)
-  | wd > 0xf = fork k z ok on
-  | otherwise = do
-    let d   = fromIntegral wd
-        b   = unsafeShiftL 1 d
-        odm = index m b
-    if m .&. b == 0
-      then node ok n (m .|. b) (insertSmallArray as odm z)
-      else let !oz = indexSmallArray as odm in
-        if ptrEq oz z
-          then on -- but we arent changing it
-          else Node ok n m $ runST $ do -- here we are, and we need to copy on write
-            bs <- cloneSmallMutableArray (unsafeCoerce as) 0 odm
-            writeSmallArray bs odm z
-            unsafeFreezeSmallArray bs
-  where wd = unsafeShiftR (xor k ok) n
-plug k z on@(Full ok n as)
-  | wd > 0xf = fork k z ok on
-  | otherwise =
-    let !d = fromIntegral wd
-        !oz = indexSmallArray as d
-    in if ptrEq oz z
-      then on
-      else Full ok n $ runST $ do
-        bs <- cloneSmallMutableArray (unsafeCoerce as) 0 16
-        writeSmallArray bs d z
-        unsafeFreezeSmallArray bs
-  where wd = unsafeShiftR (xor k ok) n
-plug k z on@(Tip ok _) = fork k z ok on
 
 -- O(1) plug a child node directly into an open parent node
 -- carefully retains identity in case we plug what is already there back in
@@ -521,13 +443,6 @@ plugPathT hint !k !i !t !acc !ns
     plugPathT hint k (i+1) t y ns
   | otherwise = return acc
 
--- | Given @k@ located under @acc@, @plugPathT k i t acc ns@ plugs acc recursively into each of the nodes
--- of @ns@ from @[i..t-1]@ from the bottom up
-plugPath :: Word64 -> Int -> Int -> Node a -> SmallArray (Node a) -> Node a
-plugPath !k !i !t !acc !ns
-  | i < t = plugPath k (i+1) t (plug k acc (indexSmallArray ns i)) ns
-  | otherwise = acc
-
 -- this recurses into @plugPathT@ deliberately.
 unplugPathT :: Hint s -> Word64 -> Int -> Int -> SmallMutableArray s (TNode s a) -> ST s (TNode s a)
 unplugPathT hint k i t ns = do
@@ -535,17 +450,9 @@ unplugPathT hint k i t ns = do
   y <- unplugT hint k x
   plugPathT hint k (i+1) t y ns
 
--- this recurses into @plugPathT@ deliberately.
-unplugPath :: Word64 -> Int -> Int -> SmallArray (Node a) -> Node a
-unplugPath k i t ns = plugPath k (i+1) t (unplug k (indexSmallArray ns i)) ns
-
 replugPathT :: PrimMonad m => Hint (PrimState m) -> Word64 -> Int -> Int -> Maybe v -> SmallMutableArray (PrimState m) (TNode (PrimState m) v) -> m (TNode (PrimState m) v)
 replugPathT hint k i t (Just v) ns = primToPrim $ plugPathT hint k i t (TTip k v) ns
 replugPathT hint k i t Nothing ns  = primToPrim $ unplugPathT hint k i t ns
-
-replugPath :: Word64 -> Int -> Int -> Maybe v -> SmallArray (Node v) -> Node v
-replugPath k i t (Just v) ns = plugPath k i t (Tip k v) ns
-replugPath k i t Nothing ns  = unplugPath k i t ns
 
 unI# :: Int -> Int#
 unI# (I# i) = i
@@ -660,56 +567,9 @@ focusM k = modifyM (focusT k)
 {-# INLINE focusM #-}
 
 -- | This changes the location of the focus in an immutable map. Operations near the focus are considerably cheaper.
-focus0 :: Word64 -> WordMap a -> WordMap a
-focus0 k wm = modify (focusWithHint cold k) wm
-{-# INLINE focus #-}
-
 focus :: Word64 -> WordMap a -> WordMap a
-focus k0 wm0@(WordMap ok0 m0 mv0 ns0@(SmallArray ns0#))
-  | k0 == ok0 = wm0 -- keys match, easy money
-  | m0 == 0 = case mv0 of
-    Nothing -> WordMap k0 0 Nothing mempty
-    Just v  -> WordMap k0 (unsafeShiftL 1 (unsafeShiftR (level (xor ok0 k0)) 2)) Nothing $ runST $ do
-      ns <- newSmallArray 1 (Tip ok0 v)
-      unsafeFreezeSmallArray ns
-  | kept <- m0 .&. unsafeShiftL 0xfffe (unsafeShiftR (level (xor ok0 k0)) 2)
-  , nkept@(I# nkept#) <- popCount kept
-  , top@(I# top#) <- sizeOfSmallArray ns0 - nkept
-  , !root <- replugPath ok0 0 top mv0 ns0
-  = runST $ primitive $ \s -> case go k0 nkept# root s of
-      (# s', ms, m#, omv #) -> case copySmallArray# ns0# top# ms (sizeofSmallMutableArray# ms -# nkept#) nkept# s' of -- we're copying nkept
-        s'' -> case unsafeFreezeSmallArray# ms s'' of
-          (# s''', spine #) -> (# s''', WordMap k0 (kept .|. W16# m#) omv (SmallArray spine) #)
-  where
-    deep :: Word64 -> Int# -> SmallArray# (Node a) -> Int# -> Node a -> Int# -> State# s ->
-      (# State# s, SmallMutableArray# s (Node a), Word#, Maybe a #)
-    deep k h# as d# on n# s = case indexSmallArray# as d# of
-      (# on' #) -> case go k (h# +# 1#) on' s of
-        (# s'', ms, m#, mv #) -> case writeSmallArray# ms (sizeofSmallMutableArray# ms -# h# -# 1#) on s'' of
-          s''' -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) .|. W16# m# of
-            W16# m'# -> (# s''', ms, m'#, mv #)
-
-    shallow :: Int# -> Node a -> Int# -> Maybe a -> State# s ->
-      (# State# s, SmallMutableArray# s (Node a), Word#, Maybe a #)
-    shallow h# on n# mv s = case newSmallArray# (h# +# 1#) on s of
-      (# s', ms #) -> case unsafeShiftL 1 (unsafeShiftR (I# n#) 2) of
-        W16# m# -> (# s', ms, m#, mv #)
-
-    go :: Word64 -> Int# -> Node a -> State# s -> (# State# s, SmallMutableArray# s (Node a), Word#, Maybe a #)
-    go k h# on@(Full ok n@(I# n#) (SmallArray as)) s
-      | wd > 0xf  = shallow h# on (unI# (level okk)) Nothing s -- we're a sibling of what we recursed into  -- [Displaced TFull]
-      | otherwise = deep k h# as (unI# (fromIntegral wd)) on n# s                                           -- Parent TFull : ..
-      where !okk = xor k ok
-            !wd = unsafeShiftR okk n
-    go k h# on@(Node ok n@(I# n#) m (SmallArray as)) s
-      | wd > 0xf = shallow h# on (unI# (level okk)) Nothing s                                            -- [Displaced TNode]
-      | !b <- unsafeShiftL 1 (fromIntegral wd), m .&. b /= 0 = deep k h# as (unI# (index m b)) on n# s   -- Parent TNode : ..
-      | otherwise = shallow h# on n# Nothing s                                                           -- [TNode]
-      where !okk = xor k ok
-            !wd = unsafeShiftR okk n
-    go k h# on@(Tip ok v) s
-      | k == ok = case newSmallArray# h# undefined s of (# s', ms #) -> (# s', ms, int2Word# 0#, Just v #)
-      | otherwise = shallow h# on (unI# (level (xor k ok))) Nothing s -- [Displaced TTip]
+focus k wm = modify (focusWithHint cold k) wm
+{-# INLINE focus #-}
 
 insertWithHint :: PrimMonad m => Hint (PrimState m) -> Word64 -> a -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
 insertWithHint hint k v wm@(TWordMap ok _ mv _)
@@ -732,15 +592,8 @@ insertM k v mwm = modifyM (insertT k v) mwm
 {-# INLINE insertM #-}
 
 -- | Immutable insert.
-insert0 :: Word64 -> a -> WordMap a -> WordMap a
-insert0 k v wm = modify (insertWithHint cold k v) wm
-{-# INLINE insert0 #-}
-
--- | Immutable insert.
 insert :: Word64 -> a -> WordMap a -> WordMap a
-insert k v wm@(WordMap ok _ mv _)
-  | k == ok, Just ov <- mv, ptrEq v ov = wm
-  | otherwise = (focus k wm) { fingerValue = Just v }
+insert k v wm = modify (insertWithHint cold k v) wm
 {-# INLINE insert #-}
 
 deleteWithHint :: PrimMonad m => Hint (PrimState m) -> Word64 -> TWordMap (PrimState m) a -> m (TWordMap (PrimState m) a)
