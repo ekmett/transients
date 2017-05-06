@@ -11,7 +11,7 @@ homepage:      http://github.com/ekmett/transients/
 bug-reports:   http://github.com/ekmett/transients/issues
 copyright:     Copyright (C) 2015 Edward A. Kmett
 build-type:    Custom
-tested-with:   GHC == 7.10.1
+tested-with:   GHC == 7.10.1, GHC == 8.0.1
 synopsis:      Transients
 description:   Transients
 
@@ -50,7 +50,7 @@ library
     deepseq,
     ghc-prim,
     lens,
-    primitive
+    primitive >= 0.6.2
 
   exposed-modules:
     Data.Transient.Primitive.Exts

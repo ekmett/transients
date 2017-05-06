@@ -709,9 +709,9 @@ instance Ord v => Ord (WordMap v) where
 
 -- TODO: Traversable, TraversableWithIndex Word64 WordMap
 
-stToPrim :: PrimMonad m => ST (PrimState m) a -> m a
-stToPrim = primToPrim
-{-# INLINE stToPrim #-}
+-- stToPrim :: PrimMonad m => ST (PrimState m) a -> m a
+--stToPrim = primToPrim
+--{-# INLINE stToPrim #-}
 
 fromListT :: PrimMonad m => [(Word64, a)] -> m (TWordMap (PrimState m) a)
 fromListT xs = stToPrim $ foldM (\r (k,v) -> insertT k v r) emptyT xs
