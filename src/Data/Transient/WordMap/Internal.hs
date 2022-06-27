@@ -407,7 +407,7 @@ plugT hint k z on@(TNode ok n m as)
           if ptrEq oz z
             then return on -- but we arent changing it
             else do -- here we are, and we need to copy on write
-              bs <- cloneSmallMutableArray as 0 odm
+              bs <- cloneSmallMutableArray as 0 (sizeOfSmallMutableArray as)
               writeSmallArray bs odm z
               apply hint bs
               return (TNode ok n m bs)
